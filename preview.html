@@ -1,0 +1,62 @@
+<!doctype html><meta charset="utf-8"><title>Claude Limits — preview</title>
+<body style="margin:0;background:#f3f3f0"><div style="max-width:520px;margin:40px auto;background:#fff;border:1px solid #eee;border-radius:16px;overflow:hidden">
+    <div style="display:flex;gap:22px;border-bottom:1px solid #eeeeee;margin-bottom:10px">
+      <button id="cl-tab-panel" style="background:none;border:none;cursor:pointer;padding:8px 2px;font-size:0.85rem;font-family:ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;color:#26251f;border-bottom:2px solid #26251f;font-weight:600">Panel</button>
+      <button id="cl-tab-tui" style="background:none;border:none;cursor:pointer;padding:8px 2px;font-size:0.85rem;font-family:ui-monospace, SFMono-Regular, 'JetBrains Mono', 'Fira Code', Menlo, Consolas, 'Liberation Mono', monospace;letter-spacing:0.05em;color:#6b6b74;border-bottom:2px solid transparent">TUI</button>
+    </div>
+    <div style="font-size:1.5rem;font-weight:700;color:#141413;letter-spacing:-0.02em">
+      Plan usage limits<span style="font-size:1.05rem;font-weight:500;color:#6b6b74;margin-left:10px">Max (5x)</span>
+    </div>
+
+    
+    <div style="margin-top:34px">
+      <div style="font-size:1.15rem;font-weight:600;color:#141413;letter-spacing:-0.01em">Current session</div>
+      <div style="font-size:0.9rem;color:#6b6b74;margin-top:5px">Resets in 4 hr 55 min</div>
+      <div style="display:flex;align-items:center;gap:18px;margin-top:12px">
+        <div style="flex:1;height:10px;border-radius:999px;background:#dbe7fb;overflow:hidden">
+          <div style="height:100%;width:1%;min-width:10px;background:#3f6fd8;border-radius:999px;transition:width .5s cubic-bezier(.16,1,.3,1)"></div>
+        </div>
+        <div style="font-size:0.98rem;color:#6b6b74;white-space:nowrap;flex-shrink:0">1% used</div>
+      </div>
+    </div>
+    
+
+    <div style="margin-top:44px">
+      <div style="font-size:1.35rem;font-weight:700;color:#141413;letter-spacing:-0.02em">Weekly limits</div>
+    </div>
+    
+    <div style="margin-top:26px">
+      <div style="font-size:1.15rem;font-weight:600;color:#141413;letter-spacing:-0.01em">All models</div>
+      <div style="font-size:0.9rem;color:#6b6b74;margin-top:5px">Resets Mon 3:21 PM</div>
+      <div style="display:flex;align-items:center;gap:18px;margin-top:12px">
+        <div style="flex:1;height:10px;border-radius:999px;background:#dbe7fb;overflow:hidden">
+          <div style="height:100%;width:65%;min-width:10px;background:#3f6fd8;border-radius:999px;transition:width .5s cubic-bezier(.16,1,.3,1)"></div>
+        </div>
+        <div style="font-size:0.98rem;color:#6b6b74;white-space:nowrap;flex-shrink:0">65% used</div>
+      </div>
+    </div>
+    <div style="margin-top:26px">
+      <div style="font-size:1.15rem;font-weight:600;color:#141413;letter-spacing:-0.01em">Fable</div>
+      <div style="font-size:0.9rem;color:#6b6b74;margin-top:5px">Resets Mon 3:21 PM</div>
+      <div style="display:flex;align-items:center;gap:18px;margin-top:12px">
+        <div style="flex:1;height:10px;border-radius:999px;background:#dbe7fb;overflow:hidden">
+          <div style="height:100%;width:12%;min-width:10px;background:#3f6fd8;border-radius:999px;transition:width .5s cubic-bezier(.16,1,.3,1)"></div>
+        </div>
+        <div style="font-size:0.98rem;color:#6b6b74;white-space:nowrap;flex-shrink:0">12% used</div>
+      </div>
+    </div>
+  
+        <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-top:40px;padding-top:16px;border-top:1px solid #eeeeee">
+          <span style="font-size:0.85rem;color:#6b6b74">Last updated: just now</span>
+          
+    <label style="display:flex;align-items:center;gap:8px;font-size:0.85rem;color:#6b6b74;">
+      <span>Refresh every</span>
+      <select id="cl-interval" style="font-family:ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;font-size:0.8rem;color:#26251f;background:#ffffff;border:1px solid #eeeeee;border-radius:6px;padding:3px 6px;cursor:pointer"><option value="10000">10s</option><option value="30000">30s</option><option value="60000">1m</option><option value="180000" selected>3m</option><option value="300000">5m</option><option value="0">Off</option></select>
+    </label>
+          <button id="cl-refresh" title="Refresh" aria-label="Refresh"
+            style="margin-left:auto;display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;border:none;border-radius:8px;background:transparent;color:#6b6b74;cursor:pointer;transition:background .15s">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 4v5h-5"/>
+            </svg>
+          </button>
+        </div></div></body>
