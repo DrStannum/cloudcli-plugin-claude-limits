@@ -5,13 +5,13 @@
   "description": "CloudCLI UI plugin: Claude plan usage limits (5-hour session, today's budget, weekly) — claude.ai-style panel + ASCII/TUI countdown view.",
   "author": "DrStannum",
   "license": "MIT",
-  "homepage": "https://github.com/DrStannum/cloudcli-claude-limits#readme",
+  "homepage": "https://github.com/DrStannum/cloudcli-plugin-claude-limits#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/DrStannum/cloudcli-claude-limits.git"
+    "url": "git+https://github.com/DrStannum/cloudcli-plugin-claude-limits.git"
   },
   "bugs": {
-    "url": "https://github.com/DrStannum/cloudcli-claude-limits/issues"
+    "url": "https://github.com/DrStannum/cloudcli-plugin-claude-limits/issues"
   },
   "keywords": [
     "cloudcli",

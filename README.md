@@ -1,6 +1,6 @@
 # Claude Limits — CloudCLI UI plugin
 
-By **DrStannum** · <https://github.com/DrStannum/cloudcli-claude-limits> · MIT
+By **DrStannum** · <https://github.com/DrStannum/cloudcli-plugin-claude-limits> · MIT
 
 Adds a **Claude Limits** tab that shows your plan usage — the current 5‑hour
 session, today's rolling budget, and the weekly buckets (All models +
@@ -82,7 +82,7 @@ It’s **pure ESM JS with zero dependencies** — no build or `npm install` need
 **From GitHub** — CloudCLI installs plugins by `git clone`:
 
 1. In CloudCLI UI open **Settings → Plugins → Install from URL**.
-2. Paste `https://github.com/DrStannum/cloudcli-claude-limits.git`
+2. Paste `https://github.com/DrStannum/cloudcli-plugin-claude-limits.git`
    (an `https://` or `git@` URL; the repo must have `manifest.json` at its root).
 3. Enable **Claude Limits**, then open the new tab from the sidebar.
 

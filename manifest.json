@@ -4,7 +4,7 @@
   "version": "1.1.0",
   "description": "Shows your Claude plan usage limits (5-hour session, today's budget, weekly) in a tab — a claude.ai-style panel plus an ASCII/TUI countdown view.",
   "author": "DrStannum",
-  "homepage": "https://github.com/DrStannum/cloudcli-claude-limits",
+  "homepage": "https://github.com/DrStannum/cloudcli-plugin-claude-limits",
   "type": "module",
   "slot": "tab",
   "entry": "dist/index.js",
