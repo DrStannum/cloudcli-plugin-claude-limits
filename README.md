@@ -1,7 +1,5 @@
 # Claude Limits — CloudCLI UI plugin
 
-By **DrStannum** · <https://github.com/DrStannum/cloudcli-plugin-claude-limits> · MIT
-
 Adds a **Claude Limits** tab that shows your plan usage — the current 5‑hour
 session, today's rolling budget, and the weekly buckets (All models +
 per‑model) — with progress bars, reset times, and a manual refresh.
