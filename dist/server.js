@@ -19,6 +19,7 @@ import http from 'node:http';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { computeDaily } from './daily.js';
 
 // ── Config ─────────────────────────────────────────────────────────────
 
@@ -43,8 +44,17 @@ const CREDS_PATH =
   path.join(os.homedir(), '.claude', '.credentials.json');
 
 /**
- * The statusline's rolling weekly-budget log. We only READ it (the statusline
- * writes it on every prompt render) to compute the exact same daily budget.
+ * Our own snapshot log of the weekly %, written on every live fetch. It is what
+ * makes "today's budget" a measurement instead of a guess — see dist/daily.js.
+ */
+const HISTORY_PATH =
+  process.env.CLAUDE_LIMITS_HISTORY ||
+  path.join(os.homedir(), '.claude', 'cloudcli-claude-limits-history.json');
+
+/**
+ * The statusline's rolling weekly-budget log. READ-ONLY, and only as a
+ * fallback baseline: the statusline writes it while rendering an interactive
+ * prompt, so it stays empty for CloudCLI and headless `claude -p` sessions.
  */
 const USAGE_LOG_PATH =
   process.env.CLAUDE_LIMITS_USAGE_LOG ||
@@ -243,118 +253,6 @@ function prettyPlan(p) {
   return p.charAt(0).toUpperCase() + p.slice(1);
 }
 
-// ── Daily budget (replicates the statusline "24" segment) ──────────────
-
-/**
- * Read the statusline's rolling weekly-budget log (read-only).
- * @returns {{ps:number, used_pct:number}[]}
- */
-function readUsageLog() {
-  try {
-    const arr = JSON.parse(fs.readFileSync(USAGE_LOG_PATH, 'utf8'));
-    if (!Array.isArray(arr)) return [];
-    return arr
-      .map((e) => ({ ps: Number(e && e.ps), used_pct: Number(e && e.used_pct) }))
-      .filter((e) => Number.isFinite(e.ps) && e.ps > 0 && Number.isFinite(e.used_pct));
-  } catch {
-    return [];
-  }
-}
-
-/**
- * Compute today's rolling budget exactly like ~/.claude/statusline-command.sh
- * (the "24" segment): anchor 24h periods to the weekly reset, derive prior
- * spend from the log, then distribute the remaining weekly budget over the
- * remaining days. Numbers match the statusline's `tu/tb%`.
- *
- * @param {number|null} wkCur     weekly "All models" used_percentage (0..100)
- * @param {number|null} wkResetMs weekly reset time in ms (null → weekday fallback)
- * @returns {import('../src/types').DailyMeter|null}
- */
-function computeDaily(wkCur, wkResetMs) {
-  if (wkCur == null) return null;
-  const DAY = 86400;
-  const now = Math.floor(Date.now() / 1000);
-
-  let cycleStart;
-  let daysElapsed;
-  let periodStart;
-  if (wkResetMs != null) {
-    const wkReset = Math.round(wkResetMs / 1000);
-    cycleStart = wkReset - 7 * DAY;
-    let d = Math.floor((now - cycleStart) / DAY);
-    if (d < 0) d = 0;
-    if (d > 6) d = 6;
-    daysElapsed = d;
-    periodStart = cycleStart + daysElapsed * DAY;
-  } else {
-    // Fallback: anchor to local midnight + ISO weekday (Mon=1 … Sun=7).
-    const dt = new Date();
-    const iso = ((dt.getDay() + 6) % 7) + 1;
-    daysElapsed = iso - 1;
-    periodStart = Math.floor(new Date(dt.getFullYear(), dt.getMonth(), dt.getDate()).getTime() / 1000);
-    cycleStart = periodStart - daysElapsed * DAY;
-  }
-  const daysRemaining = 7 - daysElapsed;
-
-  // prev_spend: cumulative positive deltas of prior periods in this cycle.
-  const prior = readUsageLog()
-    .filter((e) => e.ps >= cycleStart && e.ps < periodStart)
-    .sort((a, b) => a.ps - b.ps);
-  let prevSpend = 0;
-  let prevVal = 0;
-  for (const e of prior) {
-    let delta = e.used_pct - prevVal;
-    if (delta < 0) delta = 0;
-    prevSpend += delta;
-    prevVal = e.used_pct;
-  }
-
-  const base = 100 / 7;
-  let coldStart = false;
-  let todayUsed;
-  let prevAssumed;
-  if (daysElapsed > 0 && wkCur > 0 && (prevSpend === 0 || prevSpend >= wkCur)) {
-    // No prior-day logs, OR the delta-summed prevSpend is >= the current
-    // weekly total — which is impossible (you can't have spent more before
-    // today than the running total includes now) and means Anthropic's
-    // rolling 7-day % dipped between snapshots (old usage aged out of the
-    // window), making the log's day-over-day deltas untrustworthy for this
-    // cycle. Fall back to spreading the current total evenly across the
-    // elapsed days instead of trusting the bogus delta-sum.
-    coldStart = true;
-    todayUsed = wkCur / (daysElapsed + 1);
-    prevAssumed = wkCur - todayUsed;
-  } else {
-    todayUsed = wkCur - prevSpend;
-    if (todayUsed < 0) todayUsed = 0;
-    prevAssumed = prevSpend;
-  }
-
-  const expected = daysElapsed * base;
-  const leftover = expected - prevAssumed;
-  let todayBudget = base + leftover / daysRemaining;
-  if (todayBudget < 0) todayBudget = 0;
-
-  let barPct = todayBudget > 0 ? (todayUsed * 100) / todayBudget : 100;
-  if (barPct > 100) barPct = 100;
-
-  const periodEnd = periodStart + DAY;
-  return {
-    label: "Today's budget",
-    kind: 'daily',
-    usedPct: barPct,
-    resetsAtMs: periodEnd * 1000,
-    estimated: coldStart,
-    // Matches the statusline's "$tu/$tb%" — without this the frontend falls
-    // back to plain "N% used" (the used/budget ratio), which reads as stuck
-    // at 0% whenever today's usage hasn't caught up to the rolling budget.
-    valueText: `${Math.trunc(todayUsed)}/${Math.trunc(todayBudget)}%`,
-    todayUsed,
-    todayBudget,
-    deltaPct: todayUsed - todayBudget,
-  };
-}
 
 // ── Fetch + cache ──────────────────────────────────────────────────────
 
@@ -419,7 +317,12 @@ async function getLimits(force) {
 
   const data = normalize(raw, creds);
   const allModels = data.weekly.find((w) => w.label === 'All models') || data.weekly[0] || null;
-  data.daily = allModels ? computeDaily(allModels.usedPct, allModels.resetsAtMs) : null;
+  data.daily = allModels
+    ? computeDaily(allModels.usedPct, allModels.resetsAtMs, {
+        historyPath: HISTORY_PATH,
+        legacyPath: USAGE_LOG_PATH,
+      })
+    : null;
   const out = /** @type {import('../src/types').LimitsResponse} */ ({
     ok: true,
     data,

@@ -1,6 +1,6 @@
 {
   "name": "cloudcli-claude-limits",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "private": true,
   "description": "CloudCLI UI plugin: Claude plan usage limits (5-hour session, today's budget, weekly) — claude.ai-style panel + ASCII/TUI countdown view.",
   "author": "DrStannum",
@@ -27,9 +27,10 @@
     "build": "echo \"No build needed - dist/ ships hand-written ESM (zero deps).\"",
     "probe": "node probe.mjs",
     "smoke": "node tests/smoke.mjs",
+    "daily": "node tests/daily.mjs",
     "preview": "node tests/preview.mjs",
     "tui": "node tests/tui.mjs",
-    "test": "node tests/smoke.mjs && node tests/preview.mjs && node tests/tui.mjs"
+    "test": "node tests/daily.mjs && node tests/smoke.mjs && node tests/preview.mjs && node tests/tui.mjs"
   },
   "engines": {
     "node": ">=18"

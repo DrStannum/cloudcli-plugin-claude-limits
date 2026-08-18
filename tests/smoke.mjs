@@ -10,12 +10,17 @@ import { spawn } from 'node:child_process';
 
 const PLUGIN = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const tmp = path.join(os.tmpdir(), 'cl-fake-creds.json');
+// Keep the backend's snapshot log out of the real ~/.claude during tests.
+const histFile = path.join(os.tmpdir(), `cl-smoke-history-${process.pid}.json`);
+const noLegacy = path.join(os.tmpdir(), 'cl-smoke-no-statusline-log.json');
 fs.writeFileSync(tmp, JSON.stringify({
   claudeAiOauth: { accessToken: 'test-token', subscriptionType: 'max_5x', scopes: ['user:profile'] },
 }));
 
 const nowSec = Math.floor(Date.now() / 1000);
-const satIso = new Date(Date.now() + 3 * 86400e3).toISOString();
+// Weekly reset placed so that the current 24h period opened a minute ago —
+// the "nothing spent today yet" case that used to read as the cycle average.
+const satIso = new Date((nowSec + 3 * 86400 - 60) * 1000).toISOString();
 const fableMs = Date.now() + 3 * 86400e3;
 
 const upstream = http.createServer((req, res) => {
@@ -38,6 +43,8 @@ const child = spawn('node', [path.join(PLUGIN, 'dist/server.js')], {
     PLUGIN_NAME: 'cloudcli-claude-limits',
     CLAUDE_LIMITS_CREDS: tmp,
     CLAUDE_LIMITS_ENDPOINT: `http://127.0.0.1:${upPort}/usage`,
+    CLAUDE_LIMITS_HISTORY: histFile,
+    CLAUDE_LIMITS_USAGE_LOG: noLegacy,
   },
   stdio: ['ignore', 'pipe', 'pipe'],
 });
@@ -71,6 +78,12 @@ ok(
   typeof r.data?.daily?.valueText === 'string' && /^\d+\/\d+%$/.test(r.data.daily.valueText),
   `daily valueText "used/budget%" (statusline "$tu/$tb%" format), got ${r.data?.daily?.valueText}`,
 );
+// The weekly reset in the mock puts us at the very start of a period, so
+// nothing has been spent today yet — the pre-fix code reported the cycle
+// average here instead (weekly 65% -> ~13%).
+ok(r.data?.daily?.todayUsed < 0.1, `daily todayUsed ~0 at a period boundary, got ${r.data?.daily?.todayUsed}`);
+ok(r.data?.daily?.estimated === false, 'daily measured, not estimated');
+ok(fs.existsSync(histFile), 'backend persisted its snapshot log');
 ok(
   r.data?.host === os.hostname(),
   `host is this server's hostname "${os.hostname()}", got ${r.data?.host}`,
@@ -81,5 +94,6 @@ const r3 = await (await fetch(`http://127.0.0.1:${port}/limits?force=1`)).json()
 ok(r3.source === 'live', `force call live, got ${r3.source}`);
 
 child.kill(); upstream.close(); fs.unlinkSync(tmp);
+try { fs.unlinkSync(histFile); } catch { /* never created */ }
 if (errs.length) { console.error('FAILED:\n- ' + errs.join('\n- ')); process.exit(1); }
 console.log('smoke: ALL ASSERTIONS PASSED');

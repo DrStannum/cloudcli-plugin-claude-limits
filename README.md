@@ -55,6 +55,7 @@ panel. Click the tab → see everything from the screenshot.
 │  reads ~/.claude/.credentials.json  →  Bearer <accessToken>          │
 │  GET https://api.anthropic.com/api/oauth/usage                       │
 │  normalizes → { plan, session, daily, weekly[], host }  (+ raw)      │
+│  dist/daily.js derives "today" + logs snapshots (see below)          │
 │  caches 5s, serves GET /limits  (GET /limits?force=1 skips cache)    │
 └───────────────────────────┬──────────────────────────────────────────┘
                             │ api.rpc('GET','limits')
@@ -71,6 +72,26 @@ Data shape is taken from Claude Code’s own statusline input:
 `rate_limits.five_hour.{used_percentage,resets_at}` (session) and
 `rate_limits.seven_day*.{used_percentage,resets_at}` (weekly). `resets_at` may be
 epoch seconds, epoch ms, or an ISO string — all handled.
+
+### Today’s budget
+
+The API has no daily limit — only a 5‑hour and a 7‑day bucket. “Today’s budget”
+is derived: the weekly allowance is split across the seven 24h periods of the
+cycle (anchored to the weekly reset), unspent allowance from earlier days rolls
+forward, and the bar shows how much of today’s slice is gone.
+
+Knowing *today’s* spend needs the weekly % as it stood when the period opened,
+so the backend keeps its own snapshot log at
+`~/.claude/cloudcli-claude-limits-history.json` (one record per period — first
+and last reading with timestamps, pruned after 9 days, written atomically).
+Today’s spend is then a difference against the snapshot closest to the period
+boundary. Any stretch of the day no snapshot covers is priced at the cycle’s
+average day, and the value is marked as an estimate (`~` next to the number).
+
+Set `CLAUDE_LIMITS_HISTORY` to move that file. The statusline’s own
+`~/.claude/usage_log.json` is still read (never written) as a fallback baseline;
+it only gets written while an interactive Claude Code TUI renders its prompt, so
+for CloudCLI and headless `claude -p` usage it is typically empty or stale.
 
 ## Install / enable
 
