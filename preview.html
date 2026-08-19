@@ -1,62 +1,45 @@
-<!doctype html><meta charset="utf-8"><title>Claude Limits — preview</title>
-<body style="margin:0;background:#f3f3f0"><div style="max-width:520px;margin:40px auto;background:#fff;border:1px solid #eee;border-radius:16px;overflow:hidden">
-    <div style="display:flex;gap:22px;border-bottom:1px solid #eeeeee;margin-bottom:10px">
-      <button id="cl-tab-panel" style="background:none;border:none;cursor:pointer;padding:8px 2px;font-size:0.85rem;font-family:ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;color:#26251f;border-bottom:2px solid #26251f;font-weight:600">Panel</button>
-      <button id="cl-tab-tui" style="background:none;border:none;cursor:pointer;padding:8px 2px;font-size:0.85rem;font-family:ui-monospace, SFMono-Regular, 'JetBrains Mono', 'Fira Code', Menlo, Consolas, 'Liberation Mono', monospace;letter-spacing:0.05em;color:#6b6b74;border-bottom:2px solid transparent">TUI</button>
-    </div>
-    <div style="font-size:1.5rem;font-weight:700;color:#141413;letter-spacing:-0.02em">
-      Plan usage limits<span style="font-size:1.05rem;font-weight:500;color:#6b6b74;margin-left:10px">Max (5x)</span>
-    </div>
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Claude — preview</title>
+<style>
+  html, body { margin: 0; height: 100%; }
+  #app { height: 100vh; }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script type="module">
+  import { mount } from './dist/index.js';
 
-    
-    <div style="margin-top:34px">
-      <div style="font-size:1.15rem;font-weight:600;color:#141413;letter-spacing:-0.01em">Current session</div>
-      <div style="font-size:0.9rem;color:#6b6b74;margin-top:5px">Resets in 4 hr 55 min</div>
-      <div style="display:flex;align-items:center;gap:18px;margin-top:12px">
-        <div style="flex:1;height:10px;border-radius:999px;background:#dbe7fb;overflow:hidden">
-          <div style="height:100%;width:1%;min-width:10px;background:#3f6fd8;border-radius:999px;transition:width .5s cubic-bezier(.16,1,.3,1)"></div>
-        </div>
-        <div style="font-size:0.98rem;color:#6b6b74;white-space:nowrap;flex-shrink:0">1% used</div>
-      </div>
-    </div>
-    
+  // Deterministic fixtures — this page is a design preview, so nothing here
+  // is live (no real limits/history/sessions data is read or shown).
+  const FIXTURES = {"limits":{"ok":true,"source":"live","status":200,"endpoint":"https://api.anthropic.com/api/oauth/usage","data":{"plan":"Max (5x)","host":"example-host","session":{"label":"Current session","usedPct":42,"resetsAtMs":1787177726990,"kind":"session"},"daily":{"label":"Today's budget","kind":"daily","usedPct":58,"resetsAtMs":1787198606990,"estimated":false,"valueText":"8/14%","todayUsed":8,"todayBudget":14,"deltaPct":-6},"weekly":[{"label":"All models","usedPct":65,"resetsAtMs":1787425406990,"kind":"weekly"},{"label":"Opus","usedPct":22,"resetsAtMs":1787425406990,"kind":"weekly"},{"label":"Fable","usedPct":91,"resetsAtMs":1787425406990,"kind":"weekly"}],"fetchedAt":1787166206990}},"history":{"daily":[{"date":"2026-07-21","tokens":{"input":0,"output":0,"cacheCreate":0,"cacheRead":0},"cost":0},{"date":"2026-07-22","tokens":{"input":9854,"output":3449,"cacheCreate":985,"cacheRead":3942},"cost":0.08617335000000001},{"date":"2026-07-23","tokens":{"input":10700,"output":3745,"cacheCreate":1070,"cacheRead":4280},"cost":0.0935715},{"date":"2026-07-24","tokens":{"input":11159,"output":3906,"cacheCreate":1116,"cacheRead":4464},"cost":0.0975912},{"date":"2026-07-25","tokens":{"input":11207,"output":3922,"cacheCreate":1121,"cacheRead":4483},"cost":0.09799965},{"date":"2026-07-26","tokens":{"input":10861,"output":3801,"cacheCreate":1086,"cacheRead":4344},"cost":0.0949737},{"date":"2026-07-27","tokens":{"input":10172,"output":3560,"cacheCreate":1017,"cacheRead":4069},"cost":0.08895045},{"date":"2026-07-28","tokens":{"input":9224,"output":3228,"cacheCreate":922,"cacheRead":3690},"cost":0.0806565},{"date":"2026-07-29","tokens":{"input":8122,"output":2843,"cacheCreate":812,"cacheRead":3249},"cost":0.0710307},{"date":"2026-07-30","tokens":{"input":6987,"output":2445,"cacheCreate":699,"cacheRead":2795},"cost":0.06109575},{"date":"2026-07-31","tokens":{"input":5942,"output":2080,"cacheCreate":594,"cacheRead":2377},"cost":0.0519666},{"date":"2026-08-01","tokens":{"input":5103,"output":1786,"cacheCreate":510,"cacheRead":2041},"cost":0.044623800000000005},{"date":"2026-08-02","tokens":{"input":4567,"output":1598,"cacheCreate":457,"cacheRead":1827},"cost":0.03993285},{"date":"2026-08-03","tokens":{"input":4402,"output":1541,"cacheCreate":440,"cacheRead":1761},"cost":0.0384993},{"date":"2026-08-04","tokens":{"input":4643,"output":1625,"cacheCreate":464,"cacheRead":1857},"cost":0.0406011},{"date":"2026-08-05","tokens":{"input":5288,"output":1851,"cacheCreate":529,"cacheRead":2115},"cost":0.04624725},{"date":"2026-08-06","tokens":{"input":6299,"output":2205,"cacheCreate":630,"cacheRead":2520},"cost":0.0550905},{"date":"2026-08-07","tokens":{"input":7603,"output":2661,"cacheCreate":760,"cacheRead":3041},"cost":0.0664863},{"date":"2026-08-08","tokens":{"input":9102,"output":3186,"cacheCreate":910,"cacheRead":3641},"cost":0.0796008},{"date":"2026-08-09","tokens":{"input":10680,"output":3738,"cacheCreate":1068,"cacheRead":4272},"cost":0.09339660000000001},{"date":"2026-08-10","tokens":{"input":12212,"output":4274,"cacheCreate":1221,"cacheRead":4885},"cost":0.10679025},{"date":"2026-08-11","tokens":{"input":13578,"output":4752,"cacheCreate":1358,"cacheRead":5431},"cost":0.1187358},{"date":"2026-08-12","tokens":{"input":14675,"output":5136,"cacheCreate":1468,"cacheRead":5870},"cost":0.128331},{"date":"2026-08-13","tokens":{"input":15423,"output":5398,"cacheCreate":1542,"cacheRead":6169},"cost":0.13487220000000003},{"date":"2026-08-14","tokens":{"input":15773,"output":5521,"cacheCreate":1577,"cacheRead":6309},"cost":0.13794045000000002},{"date":"2026-08-15","tokens":{"input":15714,"output":5500,"cacheCreate":1571,"cacheRead":6286},"cost":0.13741905},{"date":"2026-08-16","tokens":{"input":15270,"output":5345,"cacheCreate":1527,"cacheRead":6108},"cost":0.13354364999999999},{"date":"2026-08-17","tokens":{"input":14503,"output":5076,"cacheCreate":1450,"cacheRead":5801},"cost":0.1268268},{"date":"2026-08-18","tokens":{"input":13503,"output":4726,"cacheCreate":1350,"cacheRead":5401},"cost":0.1180818},{"date":"2026-08-19","tokens":{"input":12380,"output":4333,"cacheCreate":1238,"cacheRead":4952},"cost":0.1082631}],"byModel":[{"model":"claude-sonnet-4-5","tokens":{"input":182867,"output":64003,"cacheCreate":18285,"cacheRead":73148},"cost":1.5991610399999998},{"model":"claude-opus-4-5","tokens":{"input":82585,"output":28905,"cacheCreate":8258,"cacheRead":33034},"cost":0.72220176},{"model":"claude-haiku-4-5","tokens":{"input":29495,"output":10323,"cacheCreate":2949,"cacheRead":11798},"cost":0.25792919999999997}],"byProject":[{"project":"cloudcli-claude-limits","tokens":{"input":117978,"output":41292,"cacheCreate":11797,"cacheRead":47192},"cost":1.0317167999999999},{"project":"agentmemory","tokens":{"input":103231,"output":36131,"cacheCreate":10322,"cacheRead":41293},"cost":0.9027521999999998},{"project":"infra-scripts","tokens":{"input":44242,"output":15485,"cacheCreate":4424,"cacheRead":17697},"cost":0.38689379999999995},{"project":"lovecraft-cron","tokens":{"input":17697,"output":6194,"cacheCreate":1770,"cacheRead":7079},"cost":0.15475751999999998},{"project":"telegram-bot-connector","tokens":{"input":11798,"output":4129,"cacheCreate":1180,"cacheRead":4719},"cost":0.10317167999999999}],"totals":{"tokens":{"input":294946,"output":103231,"cacheCreate":29492,"cacheRead":117980},"cost":2.5792919999999997,"sessions":37,"messages":812}},"sessions":{"ok":true,"sessions":[{"pid":8421,"user":"root","name":"cloudcli-claude-limits","cwd":"/srv/workspaces/demo-project-1","project":"demo-project-1","sessionId":"00000000-0000-4000-8000-000000000001","version":"2.1.0","entrypoint":"sdk-ts","model":"claude-sonnet-4-5","resumed":false,"detached":false,"uptimeSec":5400,"idleSec":8,"status":"working","cpuPct":34.2,"rss":536870912,"threads":11},{"pid":8390,"user":"root","name":"agentmemory","cwd":"/srv/workspaces/demo-project-2","project":"demo-project-2","sessionId":"00000000-0000-4000-8000-000000000002","version":"2.1.0","entrypoint":"cli","model":"claude-opus-4-5","resumed":true,"detached":false,"uptimeSec":19800,"idleSec":340,"status":"waiting","cpuPct":0.4,"rss":315621376,"threads":9},{"pid":8123,"user":"deploy","name":"infra-scripts","cwd":"/srv/workspaces/demo-project-3","project":"demo-project-3","sessionId":"00000000-0000-4000-8000-000000000003","version":"2.0.4","entrypoint":"cli","model":"claude-sonnet-4-5","resumed":false,"detached":false,"uptimeSec":42000,"idleSec":5400,"status":"quiet","cpuPct":0,"rss":199229440,"threads":6},{"pid":null,"user":"root","name":"demo-project-4","cwd":"/srv/workspaces/demo-project-4","project":"demo-project-4","sessionId":"00000000-0000-4000-8000-000000000004","version":"2.1.0","entrypoint":null,"model":null,"resumed":false,"detached":true,"uptimeSec":null,"idleSec":610,"status":"waiting","cpuPct":null,"rss":null,"threads":null}]}};
+  const q = new URLSearchParams(location.search);
+  const theme = q.get('theme') === 'dark' ? 'dark' : 'light';
+  document.body.style.background = theme === 'dark' ? '#141417' : '#f6f6f4';
 
-    <div style="margin-top:44px">
-      <div style="font-size:1.35rem;font-weight:700;color:#141413;letter-spacing:-0.02em">Weekly limits</div>
-    </div>
-    
-    <div style="margin-top:26px">
-      <div style="font-size:1.15rem;font-weight:600;color:#141413;letter-spacing:-0.01em">All models</div>
-      <div style="font-size:0.9rem;color:#6b6b74;margin-top:5px">Resets Fri 1:19 PM</div>
-      <div style="display:flex;align-items:center;gap:18px;margin-top:12px">
-        <div style="flex:1;height:10px;border-radius:999px;background:#dbe7fb;overflow:hidden">
-          <div style="height:100%;width:65%;min-width:10px;background:#3f6fd8;border-radius:999px;transition:width .5s cubic-bezier(.16,1,.3,1)"></div>
-        </div>
-        <div style="font-size:0.98rem;color:#6b6b74;white-space:nowrap;flex-shrink:0">65% used</div>
-      </div>
-    </div>
-    <div style="margin-top:26px">
-      <div style="font-size:1.15rem;font-weight:600;color:#141413;letter-spacing:-0.01em">Fable</div>
-      <div style="font-size:0.9rem;color:#6b6b74;margin-top:5px">Resets Fri 1:19 PM</div>
-      <div style="display:flex;align-items:center;gap:18px;margin-top:12px">
-        <div style="flex:1;height:10px;border-radius:999px;background:#dbe7fb;overflow:hidden">
-          <div style="height:100%;width:12%;min-width:10px;background:#3f6fd8;border-radius:999px;transition:width .5s cubic-bezier(.16,1,.3,1)"></div>
-        </div>
-        <div style="font-size:0.98rem;color:#6b6b74;white-space:nowrap;flex-shrink:0">12% used</div>
-      </div>
-    </div>
-  
-        <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-top:40px;padding-top:16px;border-top:1px solid #eeeeee">
-          <span style="font-size:0.85rem;color:#6b6b74">Last updated: just now</span>
-          
-    <label style="display:flex;align-items:center;gap:8px;font-size:0.85rem;color:#6b6b74;">
-      <span>Refresh every</span>
-      <select id="cl-interval" style="font-family:ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;font-size:0.8rem;color:#26251f;background:#ffffff;border:1px solid #eeeeee;border-radius:6px;padding:3px 6px;cursor:pointer"><option value="10000">10s</option><option value="30000">30s</option><option value="60000">1m</option><option value="180000" selected>3m</option><option value="300000">5m</option><option value="0">Off</option></select>
-    </label>
-          <button id="cl-refresh" title="Refresh" aria-label="Refresh"
-            style="margin-left:auto;display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;border:none;border-radius:8px;background:transparent;color:#6b6b74;cursor:pointer;transition:background .15s">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 4v5h-5"/>
-            </svg>
-          </button>
-        </div></div></body>
+  // The tab reads the host panel's own language key. 'ru' sets it; anything
+  // else clears it, exercising the same default-to-English path the host
+  // takes when the setting was never touched.
+  if (q.get('lang') === 'ru') localStorage.setItem('userLanguage', 'ru');
+  else localStorage.removeItem('userLanguage');
+
+  mount(document.getElementById('app'), {
+    context: { theme, project: null, session: null },
+    onContextChange: () => () => {},
+    rpc: async (method, path) => {
+      const p = String(path).replace(/^\//, '').split('?')[0];
+      if (p === 'limits') return FIXTURES.limits;
+      if (p === 'history') return FIXTURES.history;
+      if (p === 'sessions') return FIXTURES.sessions;
+      // Action routes (kill/resume/cleanup): never actually exercised by this
+      // preview — clicking Kill only arms the two-step confirm, it is not
+      // followed through here.
+      return { ok: true };
+    },
+  });
+</script>
+</body>
+</html>

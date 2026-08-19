@@ -1,196 +1,216 @@
-# Claude Limits — CloudCLI UI plugin
+# Claude — CloudCLI UI plugin
 
-Adds a **Claude Limits** tab that shows your plan usage — the current 5‑hour
-session, today's rolling budget, and the weekly buckets (All models +
-per‑model) — with progress bars, reset times, and a manual refresh.
-
-Two views, switchable via the tabs at the top of the panel. Both follow the
-host app's light/dark theme.
-
-- **Panel** — laid out like the official claude.ai *“Plan usage limits”* panel.
-- **TUI** (default) — retro terminal style: each of the three core meters (5‑hour
-  session, today's budget, weekly all‑models) is rendered as a big `H:MM:SS`
-  countdown with a full-width block-character (`█░`) progress bar. The
-  countdowns re-render every second while that tab is open, so the seconds
-  digit ticks live. The header is a shell-style `limits@<host>` prompt, where
-  `<host>` is the backend's `os.hostname()` — the frontend can't read that
-  itself, since in the browser `location.hostname` is whatever domain the
-  panel was opened on, not the server's own name.
-
-  The bars are made of monospace glyphs, so “full width” means fitting the
-  character count to the measured width: `mount()` measures one `█` once,
-  divides the bar element's width by it, and re-renders at the fitted count.
-  A `ResizeObserver` (width changes only — reacting to height would feed back
-  into itself) refits on resize. Without a real layout (SSR/tests) it falls
-  back to a fixed column count.
-
-**Refresh every** (footer, both tabs) sets the auto-refresh interval —
-10s / 30s / 1m / 3m / 5m / Off, defaulting to **3m**, persisted in `localStorage`
-under `cloudcli-claude-limits:refreshMs`. The backend cache TTL is deliberately
-below the shortest interval (see `CACHE_TTL_MS` in `dist/server.js`) so the
-chosen rate always yields fresh data rather than a cache hit.
+Adds a **Claude** tab: a single full-width dashboard combining plan usage
+limits, 30-day token/cost history, and active-session management — what used
+to be three separate plugins (Claude Limits, Claude Usage, Session Manager).
 
 ![what it looks like](preview.html)
 
-> Open `preview.html` in a browser to see the Panel layout with sample data.
-> The TUI view is what the tab opens on; it's live in-app (the countdowns tick
-> and the bars measure themselves), so it isn't captured in a static preview.
+> Open `preview.html` in a browser for a static look with sample data
+> (`node tests/preview.mjs` regenerates it and takes Playwright screenshots).
 
----
+## What's on the tab
 
-## Why a tab (and not a bottom‑right widget)
+1. **Plan usage limits** — one card per meter (current 5-hour session,
+   today's rolling budget, weekly "All models", and any per-model weekly
+   bucket that's actually been used). Each card shows a live `H:MM:SS`
+   countdown to reset (ticking every second, independent of the data poll)
+   plus a CSS progress bar colored by how close to the limit it is.
+2. **Stat tiles** — total tokens, output tokens, estimated cost, and session
+   count over the last 30 days.
+3. **Daily tokens (30 days)** — a bar chart, bar height proportional to that
+   day's token total.
+4. **By model / by project** — ranked breakdowns of the same 30-day window.
+5. **Active sessions** — every Claude CLI session currently running or
+   recently open on this host, with **Kill**, **Resume** (detached sessions
+   only), and a **Cleanup** action (deletes orphaned session records, gzips
+   transcripts untouched for 30+ days).
 
-CloudCLI’s plugin API only exposes the **`tab`** slot — plugins *“cannot appear
-outside the tab area”* and must not touch the built‑in UI. A floating pill in
-the sidebar plus a modal would require injecting into the host DOM (technically
-possible, since plugin frontends run unsandboxed in the host page, but
-unsupported and fragile across updates). This plugin takes the **sanctioned
-route**: the sidebar tab *is* the entry point, and the tab content *is* the full
-panel. Click the tab → see everything from the screenshot.
+Both light/dark theme (follows the host panel) and English/Russian
+(`localStorage.userLanguage`, re-read on every poll — there's no change
+event) are supported. The container is intentionally full-width, not capped
+like a narrow sidebar panel.
+
+**Refresh every** (top-right) sets the data-poll interval — 10s / 30s / 1m /
+3m / 5m / Off, defaulting to **3m**, persisted in `localStorage` under
+`cloudcli-claude-limits:refreshMs` (same key the pre-2.0 tab used). The
+countdown timers tick on their own 1-second timer and don't trigger a
+re-fetch.
+
+### Killing a session
+
+The **Kill** button requires a second click to confirm: the first click
+turns it into "Confirm?" for a few seconds (or until you click elsewhere,
+which cancels it); the second click actually sends `SIGTERM` (escalating to
+`SIGKILL` after 2s if the process is still alive). A toast confirms the
+result.
 
 ## How it works
 
 ```
-┌ dist/server.js (Node subprocess, has HOME) ──────────────────────────┐
-│  reads ~/.claude/.credentials.json  →  Bearer <accessToken>          │
-│  GET https://api.anthropic.com/api/oauth/usage                       │
-│  normalizes → { plan, session, daily, weekly[], host }  (+ raw)      │
-│  dist/daily.js derives "today" + logs snapshots (see below)          │
-│  caches 5s, serves GET /limits  (GET /limits?force=1 skips cache)    │
-└───────────────────────────┬──────────────────────────────────────────┘
-                            │ api.rpc('GET','limits')
-┌ dist/index.js (tab frontend) ────────────────────────────────────────┐
-│  TUI + Panel tabs, polls every 3m (configurable), Refresh button     │
-└──────────────────────────────────────────────────────────────────────┘
+┌ dist/server.js (Node subprocess, has HOME) ───────────────────────────────┐
+│  GET  /limits            → dist/server.js + dist/daily.js  (unchanged math) │
+│  GET  /history?days=30   → dist/history.js + dist/pricing.js               │
+│  GET  /sessions          → dist/sessions.js (readClaudeSessions)           │
+│  GET  /sessions/:pid/context → dist/sessionActions.js                      │
+│  POST /sessions/:pid/kill    → dist/sessionActions.js                      │
+│  POST /sessions/resume       → dist/sessionActions.js                      │
+│  POST /sessions/cleanup      → dist/sessionActions.js                      │
+└─────────────────────────────┬───────────────────────────────────────────┘
+                              │ api.rpc('GET'/'POST', ...)
+┌ dist/index.js (tab frontend) ──────────────────────────────────────────────┐
+│  DOM built once in mount(); render(state) updates it in place.             │
+│  Data poll (selectable interval) + a separate 1s countdown-only tick.      │
+└──────────────────────────────────────────────────────────────────────────┘
 ```
 
-The backend re‑reads the token file on every (uncached) request, so it always
-uses the freshest token Claude Code has written. It **never rotates the refresh
-token** — that would break your Claude Code login.
+### Plan usage limits (`GET /limits`)
 
-Data shape is taken from Claude Code’s own statusline input:
-`rate_limits.five_hour.{used_percentage,resets_at}` (session) and
-`rate_limits.seven_day*.{used_percentage,resets_at}` (weekly). `resets_at` may be
-epoch seconds, epoch ms, or an ISO string — all handled.
+Unchanged from the pre-2.0 plugin. The backend reads
+`~/.claude/.credentials.json` for the OAuth access token, calls
+`https://api.anthropic.com/api/oauth/usage`, normalizes the response
+(`normalize()` in `dist/server.js`), and derives "today's budget"
+(`dist/daily.js`) from its own snapshot log at
+`~/.claude/cloudcli-claude-limits-history.json` (see that file's header
+comment for the math — nothing here changed). Cached 5s;
+`GET /limits?force=1` skips the cache. It never rotates the refresh token.
 
-### Today’s budget
+### Token/cost history (`GET /history?days=30`)
 
-The API has no daily limit — only a 5‑hour and a 7‑day bucket. “Today’s budget”
-is derived: the weekly allowance is split across the seven 24h periods of the
-cycle (anchored to the weekly reset), unspent allowance from earlier days rolls
-forward, and the bar shows how much of today’s slice is gone.
+Ported from the `cloudcli-plugin-claude-usage` plugin (TypeScript → plain
+JS, same logic): walks `~/.claude/projects/**/*.jsonl`, parses each line
+that carries a `message.usage` block (`dist/history.js`), estimates cost
+per-model from a static price table (`dist/pricing.js`), and aggregates by
+day / model / project, deduping by `message.id`. Per-file parse results are
+cached by `mtimeMs`, so a poll only re-reads transcripts that actually
+changed.
 
-Knowing *today’s* spend needs the weekly % as it stood when the period opened,
-so the backend keeps its own snapshot log at
-`~/.claude/cloudcli-claude-limits-history.json` (one record per period — first
-and last reading with timestamps, pruned after 9 days, written atomically).
-Today’s spend is then a difference against the snapshot closest to the period
-boundary. Any stretch of the day no snapshot covers is priced at the cycle’s
-average day, and the value is marked as an estimate (`~` next to the number).
+### Sessions (`GET /sessions` and the action routes)
 
-Set `CLAUDE_LIMITS_HISTORY` to move that file. The statusline’s own
-`~/.claude/usage_log.json` is still read (never written) as a fallback baseline;
-it only gets written while an interactive Claude Code TUI renders its prompt, so
-for CloudCLI and headless `claude -p` usage it is typically empty or stale.
+`dist/sessions.js` is a straight port of `cloudcli-system-monitor`'s session
+inventory: it cross-references `/proc/<pid>` (live `claude` processes),
+`~/.claude/sessions/*.json` (the CLI's own session records), and
+`~/.claude/projects/**/*.jsonl` mtimes (to also show sessions that are
+between turns — CloudCLI only runs a session's process for the duration of
+one turn). **Privacy**: raw process command lines are parsed internally but
+never returned over RPC — only two whitelisted, pattern-validated fields
+(`--model`, `--resume`) ever leave that module.
+
+`dist/sessionActions.js` (ported from `cloudcli-plugin-session-manager`)
+implements kill / resume / cleanup / context, with one addition the donor
+didn't have: **kill and resume are re-validated against
+`readClaudeSessions()`** — the exact same read-only inventory `GET
+/sessions` shows in the UI — instead of a separate, looser check built just
+for the action route. An arbitrary pid or a made-up `(sessionId, cwd)` pair
+is rejected before anything is signaled or spawned. `resume` always spawns
+`claude --resume <id>` as the fixed OS user from `CLAUDE_LIMITS_RESUME_USER`
+(defaulting to whoever runs the plugin backend) — never a client-supplied
+user.
 
 ## Install / enable
 
-It’s **pure ESM JS with zero dependencies** — no build or `npm install` needed;
+Pure ESM JS, **zero dependencies** — no build or `npm install` needed;
 `dist/` is committed and ships ready to run.
 
 **From GitHub** — CloudCLI installs plugins by `git clone`:
 
 1. In CloudCLI UI open **Settings → Plugins → Install from URL**.
-2. Paste `https://github.com/DrStannum/cloudcli-plugin-claude-limits.git`
-   (an `https://` or `git@` URL; the repo must have `manifest.json` at its root).
-3. Enable **Claude Limits**, then open the new tab from the sidebar.
+2. Paste `https://github.com/DrStannum/cloudcli-plugin-claude-limits.git`.
+3. Enable **Claude**, then open the tab from the sidebar.
 
 **Manually** — clone or copy the folder into
 `~/.claude-code-ui/plugins/cloudcli-claude-limits/`, then enable it in
-**Settings → Plugins**.
+**Settings → Plugins**. The plugin's internal `name`
+(`cloudcli-claude-limits`) and its directory are unchanged from the 1.x
+"Claude Limits" release on purpose, so an existing install keeps its
+enabled/disabled state in `~/.claude-code-ui/plugins.json` across the
+upgrade — only the tab's display name changed, to **Claude**.
 
-Enabling spawns `dist/server.js` and adds the tab; the on/off state lives in
-`~/.claude-code-ui/plugins.json`, keyed by the manifest `name`. Installing via
-the URL flow leaves a git remote behind, which is what CloudCLI’s **Update**
-button (`git pull`) uses — a hand-copied folder has no remote and so can’t be
-updated from the UI.
-
-## Verify the endpoint (recommended once)
-
-The exact usage URL isn’t officially documented. Confirm it against your token:
+## Verify the /limits endpoint (recommended once)
 
 ```bash
 node ~/.claude-code-ui/plugins/cloudcli-claude-limits/probe.mjs
 ```
 
-It prints the HTTP status and the **raw** response. Expected: a `200` with
-`five_hour` / `seven_day` buckets. If you get:
+Prints the HTTP status and the raw response. See the Troubleshooting table
+below for what 401/403/404 mean.
 
-- **401 / 403** → the token is expired or lacks the `user:profile` scope. Use
-  Claude Code briefly (it refreshes the token), then retry.
-- **404 / different JSON** → the endpoint or field names changed. Paste the raw
-  output — the normalizer in `dist/server.js` (`normalize()`) maps generically,
-  but new field names may need a tweak.
-
-You can point the plugin at a different URL without editing code:
+You can point `/limits` at a different URL or credentials file without
+editing code:
 
 ```bash
-# in the plugin server env
 CLAUDE_LIMITS_ENDPOINT="https://.../usage"
-CLAUDE_LIMITS_CREDS="/path/to/.credentials.json"   # optional override
+CLAUDE_LIMITS_CREDS="/path/to/.credentials.json"
 ```
 
-The tab also has a collapsible **“Raw API response (debug)”** section at the
-bottom, so you can inspect exactly what the API returned and how it mapped.
+## Environment variables
+
+| Variable | Default | Affects |
+|---|---|---|
+| `CLAUDE_LIMITS_ENDPOINT` | `https://api.anthropic.com/api/oauth/usage` | `/limits` |
+| `CLAUDE_LIMITS_CREDS` | `~/.claude/.credentials.json` | `/limits` |
+| `CLAUDE_LIMITS_HISTORY` | `~/.claude/cloudcli-claude-limits-history.json` | `/limits` (daily-budget snapshot log) |
+| `CLAUDE_LIMITS_USAGE_LOG` | `~/.claude/usage_log.json` | `/limits` (read-only legacy fallback) |
+| `CLAUDE_CONFIG_DIR` | `~/.claude` | `/history` (project transcripts root) |
+| `CLAUDE_LIMITS_SESSION_HOMES` | current user's home | `/sessions/*` action routes (comma-separated home dirs) |
+| `CLAUDE_LIMITS_RESUME_USER` | the plugin backend's OS user | `/sessions/resume` (who `claude --resume` runs as) |
 
 ## Troubleshooting
 
 | Symptom | Cause / fix |
 |---|---|
-| “No Claude subscription token found” | Not signed in with Pro/Max in Claude Code, or creds not at `~/.claude/.credentials.json`. |
-| “Not authorized” (401/403) | Token expired / missing `user:profile`. Run Claude Code, then **Refresh**. |
-| “Could not load usage limits” (404/HTTP) | Endpoint changed — run `probe.mjs`, adjust `CLAUDE_LIMITS_ENDPOINT` or `normalize()`. |
-| Bars show but a weekly bucket is missing/mislabeled | The API added a new `seven_day_*` key — extend `weeklyLabel()`. |
-| Plan shows “Max” without “(5x)” | The multiplier wasn’t in the response/creds. Cosmetic; adjust `prettyPlan()`. |
+| "No Claude subscription token found" | Not signed in with Pro/Max in Claude Code, or creds not at `~/.claude/.credentials.json`. |
+| "Not authorized" (401/403) | Token expired / missing `user:profile`. Run Claude Code, then Refresh. |
+| Limits load but a weekly bucket is missing/mislabeled | The API added a new `seven_day_*` key — extend `weeklyLabel()` in `dist/server.js`. |
+| History is empty | No `~/.claude/projects/**/*.jsonl` transcripts in the last 30 days, or `CLAUDE_CONFIG_DIR` points elsewhere. |
+| A session can't be resumed | Resume only works for **detached** sessions (no live process) with a known `sessionId` + `cwd`; a live session's process is what you'd `kill`, not `resume`. |
+| Kill/Resume returns 403 | The pid or (sessionId, cwd) pair isn't in `readClaudeSessions()` — by design, this rejects anything the sessions table itself doesn't show. |
 
 ## Files
 
 ```
-manifest.json      # slot:"tab", entry+server, author, homepage
-package.json       # metadata + test scripts (no deps, no build)
-LICENSE            # MIT
-dist/server.js     # backend: creds → usage API → normalize → RPC   (authoritative)
-dist/index.js      # frontend: Panel + TUI tabs                     (authoritative)
-src/types.d.ts     # PluginAPI / Limits types (for editor intellisense)
-probe.mjs          # standalone endpoint checker
-preview.html       # generated static preview of the Panel tab
-tests/shim.mjs     # minimal DOM shim shared by the two frontend tests
-tests/smoke.mjs    # backend integration test (mock upstream)
-tests/preview.mjs  # regenerates preview.html + checks the Panel tab render
-tests/tui.mjs      # TUI tab: default view, countdowns, bars, both themes, interval field
+manifest.json          # slot:"tab", entry+server, author, homepage
+package.json           # metadata + test scripts (no deps, no build)
+LICENSE                # MIT
+dist/server.js         # backend: dispatch for all routes                (authoritative)
+dist/daily.js          # today's-budget math (unchanged since 1.x)
+dist/history.js        # token/cost aggregation (ported from claude-usage)
+dist/pricing.js        # per-model $/M-token table (ported from claude-usage)
+dist/sessions.js        # read-only session inventory (ported from system-monitor)
+dist/sessionActions.js # kill/resume/cleanup/context (ported from session-manager)
+dist/index.js           # frontend: the 5-section dashboard              (authoritative)
+src/types.d.ts          # PluginAPI / Limits types (for editor intellisense)
+probe.mjs               # standalone /limits endpoint checker
+preview.html            # generated static preview of the dashboard
+tests/daily.mjs         # unit tests for dist/daily.js
+tests/smoke.mjs         # backend integration test (mock upstream + isolated fake $HOME)
+tests/preview.mjs       # regenerates preview.html + Playwright screenshots (light/dark × en/ru)
 icon.svg
 ```
 
 `dist/` is hand-written ESM and is **committed on purpose** — CloudCLI runs
-`npm install --ignore-scripts` on a cloned plugin and never runs a build, so a
-plugin that needs compiling would install broken.
+`npm install --ignore-scripts` on a cloned plugin and never runs a build, so
+a plugin that needs compiling would install broken.
 
 Run the tests:
 
 ```bash
 npm test                  # all three
-node tests/smoke.mjs      # backend end-to-end against a mock upstream
-node tests/preview.mjs    # Panel-tab render check + preview.html
-node tests/tui.mjs        # TUI-tab render check (both themes, bars, interval field)
+node tests/daily.mjs      # today's-budget math
+node tests/smoke.mjs      # backend end-to-end: /limits, /history, /sessions, action routes
+node tests/preview.mjs    # dashboard render check + screenshots (needs Playwright)
 ```
 
 ## Security notes
 
 - The backend reads your local Claude OAuth token **from disk** and sends it
-  only to the Anthropic usage endpoint. It is never exposed to the frontend
-  (the frontend only sees normalized numbers + the raw usage JSON).
-- No token is ever written back; the credentials file is read‑only from here.
-- Zero third‑party dependencies.
+  only to the Anthropic usage endpoint. It is never exposed to the frontend.
+- No token is ever written back; the credentials file is read-only from here.
+- Session command lines are parsed server-side but never returned raw — see
+  the Sessions section above.
+- Kill/resume are re-validated against the same read-only session inventory
+  the UI displays, on top of the donor plugins' own input validation.
+- Zero third-party dependencies.
 
 ## License
 

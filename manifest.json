@@ -1,8 +1,8 @@
 {
   "name": "cloudcli-claude-limits",
-  "displayName": "Claude Limits",
-  "version": "1.2.0",
-  "description": "Shows your Claude plan usage limits (5-hour session, today's budget, weekly) in a tab — a claude.ai-style panel plus an ASCII/TUI countdown view.",
+  "displayName": "Claude",
+  "version": "2.0.0",
+  "description": "A full-width Claude dashboard: plan usage limits with countdown timers, 30-day token/cost history (totals, daily chart, by model, by project), and an active-session table with kill/resume/cleanup.",
   "author": "DrStannum",
   "license": "MIT",
   "homepage": "https://github.com/DrStannum/cloudcli-plugin-claude-limits",

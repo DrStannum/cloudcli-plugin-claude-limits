@@ -20,6 +20,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { computeDaily } from './daily.js';
+import { aggregate, parseTranscriptLine, projectLabel } from './history.js';
+import { readClaudeSessions } from './sessions.js';
+import { getContext, killSession, resumeSession, cleanup } from './sessionActions.js';
 
 // ── Config ─────────────────────────────────────────────────────────────
 
@@ -60,35 +63,43 @@ const USAGE_LOG_PATH =
   process.env.CLAUDE_LIMITS_USAGE_LOG ||
   path.join(os.homedir(), '.claude', 'usage_log.json');
 
+/** Root of the transcripts read by /history and the session inventory. */
+const CLAUDE_DIR = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
+
 // ── Credentials ────────────────────────────────────────────────────────
 
 /**
  * Read the current OAuth credentials from disk on every (uncached) call so we
  * always use the freshest access token Claude Code has written.
- * @returns {{ accessToken: string|null, subscriptionType: string|null, scopes: string[] }}
+ * @returns {{ accessToken: string|null, subscriptionType: string|null, rateLimitTier: string|null, scopes: string[] }}
  */
 function readCredentials() {
   let raw;
   try {
     raw = fs.readFileSync(CREDS_PATH, 'utf8');
   } catch {
-    return { accessToken: null, subscriptionType: null, scopes: [] };
+    return { accessToken: null, subscriptionType: null, rateLimitTier: null, scopes: [] };
   }
   let json;
   try {
     json = JSON.parse(raw);
   } catch {
-    return { accessToken: null, subscriptionType: null, scopes: [] };
+    return { accessToken: null, subscriptionType: null, rateLimitTier: null, scopes: [] };
   }
-  // Known shape: { claudeAiOauth: { accessToken, refreshToken, expiresAt, scopes, subscriptionType } }
+  // Known shape: { claudeAiOauth: { accessToken, refreshToken, expiresAt, scopes, subscriptionType, rateLimitTier } }
   // Be liberal: also accept a flatter shape just in case.
   const o = json.claudeAiOauth || json.oauth || json;
   const accessToken =
     o.accessToken || o.access_token || o.token || null;
   const subscriptionType =
     o.subscriptionType || o.subscription_type || o.plan || null;
+  // e.g. "default_claude_max_20x" — the only place the plan's rate-limit
+  // multiplier is available locally; the /oauth/usage response's own
+  // plan/tier fields don't reliably carry it.
+  const rateLimitTier =
+    o.rateLimitTier || o.rate_limit_tier || null;
   const scopes = Array.isArray(o.scopes) ? o.scopes : [];
-  return { accessToken, subscriptionType, scopes };
+  return { accessToken, subscriptionType, rateLimitTier, scopes };
 }
 
 // ── Normalization ──────────────────────────────────────────────────────
@@ -187,7 +198,7 @@ function weeklyLabel(key) {
 
 /**
  * Map a raw usage response into the claude.ai-style shape.
- * @param {any} raw @param {{subscriptionType: string|null}} creds
+ * @param {any} raw @param {{subscriptionType: string|null, rateLimitTier: string|null}} creds
  * @returns {import('../src/types').Limits}
  */
 function normalize(raw, creds) {
@@ -200,27 +211,70 @@ function normalize(raw, creds) {
         ? raw
         : {};
 
-  // --- session (5-hour) ---
-  const sessionKey = Object.keys(root).find((k) =>
-    /^(five[_-]?hour|5[_-]?hour|session|current)/i.test(k),
-  );
-  const sNode = sessionKey ? root[sessionKey] : null;
   /** @type {import('../src/types').Meter|null} */
-  const session = sNode
-    ? { label: 'Current session', usedPct: usedPct(sNode), resetsAtMs: resetMs(sNode), kind: 'session' }
-    : null;
-
-  // --- weekly buckets (seven_day*) ---
-  const weeklyKeys = Object.keys(root).filter((k) =>
-    /^(seven[_-]?day|7[_-]?day|week)/i.test(k),
-  );
+  let session = null;
   /** @type {import('../src/types').Meter[]} */
-  const weekly = weeklyKeys.map((k) => ({
-    label: weeklyLabel(k),
-    usedPct: usedPct(root[k]),
-    resetsAtMs: resetMs(root[k]),
-    kind: 'weekly',
-  }));
+  let weekly = [];
+
+  // Preferred source: `raw.limits[]`, a flat list of self-describing entries
+  // ({kind, percent, resets_at, scope}). This is what tells us which model
+  // Anthropic is currently spotlighting with its own weekly cap — right now
+  // that's Fable, but the point is we never hardcode a name: whatever
+  // `weekly_scoped` entry (and its `scope.model.display_name`) the API sends
+  // is the one we show. The older flat `seven_day_<model>` keys have started
+  // coming back as opaque rotating codenames (`nimbus_quill`,
+  // `omelette_promotional`, ...) that no longer say which model they mean, so
+  // they're kept only as a fallback below for API shapes without `limits[]`.
+  const limitsArr = raw && typeof raw === 'object' && Array.isArray(raw.limits) ? raw.limits : null;
+
+  if (limitsArr && limitsArr.length) {
+    for (const entry of limitsArr) {
+      if (!entry || typeof entry !== 'object') continue;
+      const pctVal = usedPct(entry);
+      const resets = resetMs(entry);
+      if (entry.kind === 'session') {
+        session = { label: 'Current session', usedPct: pctVal, resetsAtMs: resets, kind: 'session' };
+      } else if (entry.kind === 'weekly_all') {
+        weekly.push({ label: 'All models', usedPct: pctVal, resetsAtMs: resets, kind: 'weekly' });
+      } else if (entry.kind === 'weekly_scoped') {
+        const modelName = entry.scope && entry.scope.model && entry.scope.model.display_name;
+        weekly.push({
+          label: modelName ? String(modelName) : 'Weekly',
+          usedPct: pctVal,
+          resetsAtMs: resets,
+          kind: 'weekly',
+        });
+      }
+      // Other/future `kind`s are left alone rather than guessed at.
+    }
+  }
+
+  if (!session || !weekly.length) {
+    // --- legacy fallback: flat five_hour / seven_day* keys, regex-guessed ---
+    if (!session) {
+      const sessionKey = Object.keys(root).find((k) =>
+        /^(five[_-]?hour|5[_-]?hour|session|current)/i.test(k),
+      );
+      const sNode = sessionKey ? root[sessionKey] : null;
+      session = sNode
+        ? { label: 'Current session', usedPct: usedPct(sNode), resetsAtMs: resetMs(sNode), kind: 'session' }
+        : null;
+    }
+    if (!weekly.length) {
+      const weeklyKeys = Object.keys(root).filter((k) =>
+        /^(seven[_-]?day|7[_-]?day|week)/i.test(k),
+      );
+      weekly = weeklyKeys
+        .map((k) => ({
+          label: weeklyLabel(k),
+          usedPct: usedPct(root[k]),
+          resetsAtMs: resetMs(root[k]),
+          kind: 'weekly',
+        }))
+        .filter((m) => m.usedPct != null || m.resetsAtMs != null);
+    }
+  }
+
   // "All models" first, then the rest as-is.
   weekly.sort((a, b) => (a.label === 'All models' ? -1 : b.label === 'All models' ? 1 : 0));
 
@@ -229,7 +283,8 @@ function normalize(raw, creds) {
     (raw && typeof raw === 'object' &&
       (raw.plan || raw.tier || raw.subscription || raw.subscription_type || raw.plan_type)) ||
     null;
-  const plan = prettyPlan(rawPlan) || prettyPlan(creds.subscriptionType);
+  const plan =
+    prettyPlan(rawPlan, creds.rateLimitTier) || prettyPlan(creds.subscriptionType, creds.rateLimitTier);
 
   // Host of the machine the plugin backend runs on — the TUI header shows it
   // as a shell-style `limits@<host>` prompt. The frontend can't read this
@@ -238,14 +293,23 @@ function normalize(raw, creds) {
   return { plan, session, weekly, host: os.hostname() || null, fetchedAt: Date.now() };
 }
 
-/** @param {any} p @returns {string|null} */
-function prettyPlan(p) {
+/**
+ * @param {any} p plan/tier/subscription string, e.g. "max", "max_20x"
+ * @param {string|null} [tierHint] rateLimitTier fallback, e.g. "default_claude_max_20x",
+ *   used for the multiplier when `p` itself doesn't carry one.
+ * @returns {string|null}
+ */
+function prettyPlan(p, tierHint) {
   if (!p || typeof p !== 'string') return null;
   const k = p.toLowerCase();
+  const numFrom = (s) => {
+    const m = s && s.match(/(\d+)\s*x/);
+    return m ? m[1] : null;
+  };
   if (k.includes('max')) {
-    // e.g. "max", "max_5x", "max_20x"
-    const m = k.match(/(\d+)\s*x/);
-    return m ? `Max (${m[1]}x)` : 'Max';
+    // e.g. "max", "max_5x", "max_20x" — or, failing that, the rate-limit tier.
+    const n = numFrom(k) || numFrom(typeof tierHint === 'string' ? tierHint.toLowerCase() : '');
+    return n ? `Max (${n}x)` : 'Max';
   }
   if (k.includes('pro')) return 'Pro';
   if (k.includes('team')) return 'Team';
@@ -349,6 +413,88 @@ function errMsg(e) {
   return e && typeof e === 'object' && 'message' in e ? String(e.message) : String(e);
 }
 
+// ── History (token/cost aggregation) ──────────────────────────────────
+
+/**
+ * Per-file parse cache keyed by mtime, so repeated polls only re-read changed
+ * transcripts. Ported from cloudcli-plugin-claude-usage/src/server.ts.
+ * @type {Map<string, {mtimeMs: number, entries: import('./history.js').UsageEntry[]}>}
+ */
+const historyFileCache = new Map();
+
+/** @param {string} file */
+function readSessionFile(file) {
+  const mtimeMs = fs.statSync(file).mtimeMs;
+  const cached = historyFileCache.get(file);
+  if (cached && cached.mtimeMs === mtimeMs) return cached.entries;
+  const entries = [];
+  for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
+    const e = parseTranscriptLine(line);
+    if (e) entries.push(e);
+  }
+  historyFileCache.set(file, { mtimeMs, entries });
+  return entries;
+}
+
+/** @param {number} days */
+function getHistory(days) {
+  const projectsDir = path.join(CLAUDE_DIR, 'projects');
+  const sessions = [];
+  let dirs = [];
+  try {
+    dirs = fs.readdirSync(projectsDir, { withFileTypes: true });
+  } catch {
+    // no transcripts at all — aggregate over nothing, frontend shows empty state
+  }
+  for (const dir of dirs) {
+    if (!dir.isDirectory()) continue;
+    const project = projectLabel(dir.name);
+    let files = [];
+    try {
+      files = fs.readdirSync(path.join(projectsDir, dir.name)).filter((f) => f.endsWith('.jsonl'));
+    } catch {
+      continue;
+    }
+    for (const f of files) {
+      try {
+        sessions.push({ project, entries: readSessionFile(path.join(projectsDir, dir.name, f)) });
+      } catch {
+        /* unreadable file — skip */
+      }
+    }
+  }
+  return aggregate(sessions, days, Date.now());
+}
+
+// ── Request bodies ─────────────────────────────────────────────────────
+
+/** @param {import('http').IncomingMessage} req @param {import('http').ServerResponse} res */
+function readJsonBody(req, res) {
+  return new Promise((resolve) => {
+    let body = '';
+    const MAX_BODY = 4096;
+    let aborted = false;
+    req.on('data', (d) => {
+      body += d;
+      if (body.length > MAX_BODY) {
+        aborted = true;
+        res.writeHead(413);
+        res.end(JSON.stringify({ ok: false, error: 'Request too large' }));
+        req.socket.destroy();
+        resolve(null);
+      }
+    });
+    req.on('end', () => {
+      if (aborted) return;
+      try {
+        resolve(JSON.parse(body || '{}'));
+      } catch {
+        resolve(undefined); // signals "bad json" to the caller
+      }
+    });
+  });
+}
+
 // ── HTTP server ────────────────────────────────────────────────────────
 
 const server = http.createServer(async (req, res) => {
@@ -363,6 +509,84 @@ const server = http.createServer(async (req, res) => {
     } catch (err) {
       res.writeHead(500);
       res.end(JSON.stringify(fail('http_error', errMsg(err))));
+    }
+    return;
+  }
+
+  if (req.method === 'GET' && url.pathname.replace(/\/+$/, '') === '/history') {
+    try {
+      const days = Math.min(Math.max(Number(url.searchParams.get('days')) || 30, 1), 365);
+      res.end(JSON.stringify(getHistory(days)));
+    } catch (err) {
+      res.writeHead(500);
+      res.end(JSON.stringify({ ok: false, error: errMsg(err) }));
+    }
+    return;
+  }
+
+  if (req.method === 'GET' && url.pathname.replace(/\/+$/, '') === '/sessions') {
+    try {
+      res.end(JSON.stringify({ ok: true, sessions: readClaudeSessions(null) }));
+    } catch (err) {
+      res.writeHead(500);
+      res.end(JSON.stringify({ ok: false, error: errMsg(err) }));
+    }
+    return;
+  }
+
+  const contextMatch = url.pathname.match(/^\/sessions\/(\d+)\/context\/?$/);
+  if (req.method === 'GET' && contextMatch) {
+    try {
+      const { status, body } = await getContext(parseInt(contextMatch[1], 10));
+      res.writeHead(status);
+      res.end(JSON.stringify(body));
+    } catch (err) {
+      res.writeHead(500);
+      res.end(JSON.stringify({ ok: false, error: errMsg(err) }));
+    }
+    return;
+  }
+
+  const killMatch = url.pathname.match(/^\/sessions\/(\d+)\/kill\/?$/);
+  if (req.method === 'POST' && killMatch) {
+    try {
+      const { status, body } = killSession(parseInt(killMatch[1], 10));
+      res.writeHead(status);
+      res.end(JSON.stringify(body));
+    } catch (err) {
+      res.writeHead(500);
+      res.end(JSON.stringify({ ok: false, error: errMsg(err) }));
+    }
+    return;
+  }
+
+  if (req.method === 'POST' && url.pathname.replace(/\/+$/, '') === '/sessions/resume') {
+    const parsed = await readJsonBody(req, res);
+    if (parsed === null) return; // readJsonBody already responded (413)
+    if (parsed === undefined) {
+      res.writeHead(400);
+      res.end(JSON.stringify({ ok: false, error: 'bad json' }));
+      return;
+    }
+    try {
+      const { status, body } = resumeSession(parsed);
+      res.writeHead(status);
+      res.end(JSON.stringify(body));
+    } catch (err) {
+      res.writeHead(500);
+      res.end(JSON.stringify({ ok: false, error: errMsg(err) }));
+    }
+    return;
+  }
+
+  if (req.method === 'POST' && url.pathname.replace(/\/+$/, '') === '/sessions/cleanup') {
+    try {
+      const { status, body } = await cleanup();
+      res.writeHead(status);
+      res.end(JSON.stringify(body));
+    } catch (err) {
+      res.writeHead(500);
+      res.end(JSON.stringify({ ok: false, error: errMsg(err) }));
     }
     return;
   }
