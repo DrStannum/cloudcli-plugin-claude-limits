@@ -3,8 +3,23 @@
  * Claude Limits — today's-budget math.
  *
  * The usage API exposes only a 5-hour and a 7-day bucket; there is no daily
- * limit. "Today's budget" is derived: split the weekly allowance across the
- * seven 24h periods of the cycle, then show how much of today's slice is gone.
+ * limit. "Today's budget" is derived: the weekly allowance is rationed as a
+ * plain 1/7 per 24h period, and whatever the earlier days left unspent carries
+ * forward whole. By day N (0-based) of the cycle the cumulative ceiling is
+ * `(N+1) * 1/7`, so today's budget is that ceiling minus everything already
+ * spent this cycle, and today's slice is how much of it is gone.
+ *
+ * The leftover is deliberately *not* smeared over the days still to come. An
+ * earlier version divided it by the days remaining, which quietly punishes
+ * today for the past: after a few quiet days the meter still showed roughly an
+ * average slice instead of the "you could spend it all today" number the
+ * arithmetic actually allows. That same smoothing was tried and withdrawn in
+ * the report.vsm.workwatch.pro cron pipeline, where it stalled the pipeline for
+ * 12-15 hours at a stretch (see its scripts/cron/rules/90-rationale.md, section
+ * R-quota); the law it settled on — 1/7 a day, unspent carries forward, the
+ * average pace is what's capped, not any single day — is what this file now
+ * implements. Only the ceiling formula is borrowed: this is an indicator, so
+ * there is no hard weekly stop or window endgame here, and it gates nothing.
  *
  * Getting "how much was spent today" right needs the weekly % as it stood at
  * the start of the current period, so this module keeps its own snapshot log
@@ -264,7 +279,7 @@ export function computeDailyFrom({ wkCur, wkResetMs, nowMs, history, legacy = []
   if (wkCur == null) return null;
 
   const pos = cyclePosition(wkResetMs, nowMs);
-  const { daysElapsed, daysRemaining, periodStart } = pos;
+  const { daysElapsed, periodStart } = pos;
   const baseline = pickBaseline(history, legacy, pos);
 
   // Average daily spend so far this cycle — used to price the stretch of time
@@ -297,11 +312,13 @@ export function computeDailyFrom({ wkCur, wkResetMs, nowMs, history, legacy = []
   if (todayUsed < 0) todayUsed = 0;
   if (todayUsed > wkCur) todayUsed = wkCur;
 
-  // Whatever wasn't spent today went to the earlier days of the cycle; any
-  // allowance they left unused rolls forward into today's slice.
+  // Whatever wasn't spent today went to the earlier days of the cycle. Each
+  // day grants a plain BASE and unspent allowance carries forward whole, so by
+  // day N (0-based) the cycle may cumulatively have spent (N+1) * BASE; what
+  // today may spend is that ceiling minus what the earlier days already took.
   const prevSpend = wkCur - todayUsed;
-  const leftover = daysElapsed * BASE - prevSpend;
-  let todayBudget = BASE + leftover / daysRemaining;
+  const ceilingToday = (daysElapsed + 1) * BASE;
+  let todayBudget = ceilingToday - prevSpend;
   if (todayBudget < 0) todayBudget = 0;
 
   let barPct = todayBudget > 0 ? (todayUsed * 100) / todayBudget : 100;

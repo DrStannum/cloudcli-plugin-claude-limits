@@ -65,8 +65,51 @@ function scenario(openedAgoSec) {
   const d = computeDailyFrom({ wkCur: 36, wkResetMs: s.wkResetMs, nowMs: s.nowMs, history });
   near(d.todayUsed, 6, 0.05, 'today = current weekly minus yesterday-end baseline');
   ok(d.estimated === false, 'baseline within grace of the boundary is exact');
-  // 30% spent over 3 prior days vs 42.9% budgeted -> the leftover rolls forward.
-  near(d.todayBudget, 100 / 7 + (3 * (100 / 7) - 30) / 4, 0.01, 'unused allowance rolls into today');
+  // 30% spent over 3 prior days against a day-3 ceiling of 4/7 = 57.1%: the
+  // whole 27.1% leftover is available today, not a quarter of it.
+  near(d.todayBudget, 4 * (100 / 7) - 30, 0.01, 'unused allowance rolls into today whole');
+}
+
+// ── 2b. The ceiling matches the static cumulative table ─────────────────
+//      Spending today's budget in full must land the cycle exactly on
+//      14.3 / 28.6 / 42.9 / 57.2 / 71.5 / 85.8 / 100 for days 0..6.
+{
+  const TABLE = [14.3, 28.6, 42.9, 57.2, 71.5, 85.8, 100];
+  for (let day = 0; day < 7; day += 1) {
+    const nowMs = 1_800_000_000_000;
+    const now = nowMs / 1000;
+    const periodStart = now - 3600;
+    const wkResetMs = (periodStart - day * DAY + 7 * DAY) * S;
+    const prevSpend = day * 5;                     // deliberately under-spent
+    const wkCur = prevSpend + 2;                   // 2% spent so far today
+    const history = emptyHistory();
+    history.periods.push({
+      ps: periodStart - DAY, firstPct: 0, firstTs: periodStart - DAY,
+      lastPct: prevSpend, lastTs: periodStart,
+    });
+    const d = computeDailyFrom({ wkCur, wkResetMs, nowMs, history });
+    ok(cyclePosition(wkResetMs, nowMs).daysElapsed === day, `day index ${day}`);
+    near(d.todayUsed, 2, 0.01, `day ${day}: today's spend measured off the baseline`);
+    near(prevSpend + d.todayBudget, TABLE[day], 0.1,
+      `day ${day}: full use of today's budget lands on the cumulative table`);
+  }
+
+  // The real-world reading this model was cut over on: day 4, 47% spent
+  // before today, 61% weekly now.
+  const nowMs = 1_800_000_000_000;
+  const now = nowMs / 1000;
+  const periodStart = now - 3600;
+  const wkResetMs = (periodStart - 4 * DAY + 7 * DAY) * S;
+  const history = emptyHistory();
+  history.periods.push({
+    ps: periodStart - DAY, firstPct: 0, firstTs: periodStart - DAY,
+    lastPct: 47, lastTs: periodStart,
+  });
+  const d = computeDailyFrom({ wkCur: 61, wkResetMs, nowMs, history });
+  near(d.todayUsed, 14, 0.01, 'day 4: 61 - 47 spent today');
+  near(d.todayBudget, 5 * (100 / 7) - 47, 0.01, 'day 4: ceiling 71.4 minus the 47 already spent');
+  near(d.usedPct, 57.3, 0.2, 'day 4: bar just under 60% used');
+  ok(d.valueText === '14/24%', `day 4 valueText, got ${d.valueText}`);
 }
 
 // ── 3. First period of a cycle: baseline is a known zero ────────────────

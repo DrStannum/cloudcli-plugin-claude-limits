@@ -72,7 +72,9 @@ Unchanged from the pre-2.0 plugin. The backend reads
 (`normalize()` in `dist/server.js`), and derives "today's budget"
 (`dist/daily.js`) from its own snapshot log at
 `~/.claude/cloudcli-claude-limits-history.json` (see that file's header
-comment for the math — nothing here changed). Cached 5s;
+comment for the math: a plain 1/7 a day, with unspent allowance
+carrying forward whole rather than being spread over the days still to
+come). Cached 5s;
 `GET /limits?force=1` skips the cache. It never rotates the refresh token.
 
 ### Token/cost history (`GET /history?days=30`)
@@ -173,7 +175,7 @@ manifest.json          # slot:"tab", entry+server, author, homepage
 package.json           # metadata + test scripts (no deps, no build)
 LICENSE                # MIT
 dist/server.js         # backend: dispatch for all routes                (authoritative)
-dist/daily.js          # today's-budget math (unchanged since 1.x)
+dist/daily.js          # today's-budget math (1/7 a day, leftover carries forward)
 dist/history.js        # token/cost aggregation (ported from claude-usage)
 dist/pricing.js        # per-model $/M-token table (ported from claude-usage)
 dist/sessions.js        # read-only session inventory (ported from system-monitor)
