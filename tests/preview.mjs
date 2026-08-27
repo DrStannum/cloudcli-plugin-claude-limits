@@ -52,64 +52,75 @@ const limits = {
   },
 };
 
-function zeroTok() {
-  return { input: 0, output: 0, cacheCreate: 0, cacheRead: 0 };
-}
-function addTok(a, b) {
-  a.input += b.input; a.output += b.output; a.cacheCreate += b.cacheCreate; a.cacheRead += b.cacheRead;
-}
-function tokTotal(tk) {
-  return tk.input + tk.output + tk.cacheCreate + tk.cacheRead;
-}
+// Synthetic transcripts, fed through the *real* dist/history.js aggregation
+// rather than hand-built totals — so the preview exercises the same code path
+// the backend does, including the Usage view's period/session grouping and its
+// project/model filters. Deterministic (a fixed-seed LCG, no Math.random), so
+// re-running produces the same page byte-for-byte apart from the clock.
 
-const daily = [];
-for (let i = 29; i >= 0; i--) {
-  const date = new Date(now - i * DAY).toISOString().slice(0, 10);
-  // A gentle wave plus a ramp, so the chart has real shape without randomness.
-  const base = 6000 + 4500 * Math.sin(i / 3.3) + (29 - i) * 220;
-  const input = Math.max(0, Math.round(base));
-  const output = Math.round(input * 0.35);
-  const tokens = { input, output, cacheCreate: Math.round(input * 0.1), cacheRead: Math.round(input * 0.4) };
-  const cost = (input * 3 + output * 15 + tokens.cacheCreate * 3.75 + tokens.cacheRead * 0.3) / 1e6;
-  daily.push({ date, tokens, cost });
-}
-// A couple of quiet early days, to show the chart doesn't force a nonzero floor.
-daily[0].tokens = zeroTok();
-daily[0].cost = 0;
-
-const byModelSrc = [
-  ['claude-sonnet-4-5', 0.62],
-  ['claude-opus-4-5', 0.28],
-  ['claude-haiku-4-5', 0.10],
+const PROJECTS = [
+  ['cloudcli-claude-limits', 1.0],
+  ['agentmemory', 0.85],
+  ['infra-scripts', 0.4],
+  ['lovecraft-cron', 0.15],
+  ['telegram-bot-connector', 0.1],
 ];
-const byProjectSrc = [
-  ['cloudcli-claude-limits', 0.4],
-  ['agentmemory', 0.35],
-  ['infra-scripts', 0.15],
-  ['lovecraft-cron', 0.06],
-  ['telegram-bot-connector', 0.04],
+const MODELS = [
+  ['claude-sonnet-4-5', 0.6],
+  ['claude-opus-4-5', 0.3],
+  ['claude-haiku-4-5', 0.1],
 ];
-const totalsTokens = daily.reduce((acc, d) => { addTok(acc, d.tokens); return acc; }, zeroTok());
-const totalsCost = daily.reduce((acc, d) => acc + d.cost, 0);
 
-function splitBy(src, tokTotalAll, costTotal) {
-  return src.map(([key, share]) => {
-    const tokens = {
-      input: Math.round(totalsTokens.input * share),
-      output: Math.round(totalsTokens.output * share),
-      cacheCreate: Math.round(totalsTokens.cacheCreate * share),
-      cacheRead: Math.round(totalsTokens.cacheRead * share),
-    };
-    return { key, tokens, cost: costTotal * share };
+/** Fixed-seed LCG — the preview must not move between runs. */
+let seed = 20260826;
+function rnd() {
+  seed = (seed * 1103515245 + 12345) % 2147483648;
+  return seed / 2147483648;
+}
+function pick(weighted) {
+  const total = weighted.reduce((a, [, w]) => a + w, 0);
+  let x = rnd() * total;
+  for (const [v, w] of weighted) {
+    x -= w;
+    if (x <= 0) return v;
+  }
+  return weighted[weighted.length - 1][0];
+}
+
+const SPAN_DAYS = 75; // enough history for the "All time" / monthly views
+const SESSIONS = [];
+let msgSeq = 0;
+for (let i = 0; i < 140; i++) {
+  const project = pick(PROJECTS);
+  const model = pick(MODELS);
+  // Bias sessions towards recent days so the daily chart ramps rather than
+  // sitting flat.
+  const dayAgo = Math.floor(SPAN_DAYS * rnd() * rnd());
+  const startMs = now - dayAgo * DAY + Math.floor(rnd() * 12 * 3600e3);
+  const turns = 2 + Math.floor(rnd() * 28);
+  const entries = [];
+  for (let k = 0; k < turns; k++) {
+    const input = 60 + Math.floor(rnd() * 900);
+    entries.push({
+      id: `msg_${String(msgSeq++).padStart(5, '0')}`,
+      timestamp: new Date(startMs + k * (40_000 + Math.floor(rnd() * 200_000))).toISOString(),
+      model,
+      tokens: {
+        input,
+        output: Math.round(input * (0.4 + rnd())),
+        cacheCreate: Math.round(input * (2 + rnd() * 12)),
+        cacheRead: Math.round(input * (30 + rnd() * 260)),
+      },
+    });
+  }
+  SESSIONS.push({
+    // Shaped like a real transcript file name (the backend passes the .jsonl
+    // basename through as the session id).
+    id: `0000${String(i).padStart(4, '0')}-0000-4000-8000-${String(i).padStart(12, '0')}`,
+    project,
+    entries,
   });
 }
-
-const history = {
-  daily,
-  byModel: splitBy(byModelSrc, totalsTokens, totalsCost).map(({ key, ...v }) => ({ model: key, ...v })),
-  byProject: splitBy(byProjectSrc, totalsTokens, totalsCost).map(({ key, ...v }) => ({ project: key, ...v })),
-  totals: { tokens: totalsTokens, cost: totalsCost, sessions: 37, messages: 812 },
-};
 
 const sessions = [
   {
@@ -138,7 +149,7 @@ const sessions = [
   },
 ];
 
-const FIXTURES = { limits, history, sessions: { ok: true, sessions } };
+const FIXTURES = { limits, sessions: { ok: true, sessions }, transcripts: SESSIONS };
 
 // ── preview.html ───────────────────────────────────────────────────────
 
@@ -156,6 +167,9 @@ const html = `<!doctype html>
 <div id="app"></div>
 <script type="module">
   import { mount } from './dist/index.js';
+  // The same aggregation the backend runs — dist/history.js is dependency-free
+  // ESM, so the preview can call it directly instead of faking its output.
+  import { aggregate, historyOptions } from './dist/history.js';
 
   // Deterministic fixtures — this page is a design preview, so nothing here
   // is live (no real limits/history/sessions data is read or shown).
@@ -174,10 +188,14 @@ const html = `<!doctype html>
     context: { theme, project: null, session: null },
     onContextChange: () => () => {},
     rpc: async (method, path) => {
-      const p = String(path).replace(/^\\//, '').split('?')[0];
+      const [p, qs] = String(path).replace(/^\\//, '').split('?');
       if (p === 'limits') return FIXTURES.limits;
-      if (p === 'history') return FIXTURES.history;
       if (p === 'sessions') return FIXTURES.sessions;
+      if (p === 'history' || p === 'usage') {
+        // Exactly what dist/server.js does for these two routes.
+        const opts = historyOptions(new URLSearchParams(qs || ''), p === 'history' ? 30 : null);
+        return aggregate(FIXTURES.transcripts, opts, Date.now());
+      }
       // Action routes (kill/resume/cleanup): never actually exercised by this
       // preview — clicking Kill only arms the two-step confirm, it is not
       // followed through here.
@@ -236,9 +254,20 @@ const COMBOS = [
   { theme: 'light', lang: 'ru' },
   { theme: 'dark', lang: 'ru' },
 ];
+/** Combos that also get a Usage-tab screenshot. */
+const USAGE_SHOTS = [
+  { theme: 'light', lang: 'en' },
+  { theme: 'dark', lang: 'ru' },
+];
 let firstRunErrors = [];
 for (const { theme, lang } of COMBOS) {
-  const page = await browser.newPage({ viewport: { width: 1400, height: 1400 }, deviceScaleFactor: 2 });
+  const page = await browser.newPage({
+    viewport: { width: 1400, height: 1400 },
+    deviceScaleFactor: 2,
+    // The Usage view's session-id button writes to the clipboard; without the
+    // grant Chromium denies it and we'd be asserting the fallback path only.
+    permissions: ['clipboard-read', 'clipboard-write'],
+  });
   /** @type {string[]} */
   const errors = [];
   page.on('pageerror', (e) => errors.push(String(e)));
@@ -253,14 +282,15 @@ for (const { theme, lang } of COMBOS) {
     // uppercase for display, which innerText reflects but the source text
     // (what we actually want to assert on) does not.
     const text = await page.evaluate(() => document.body.textContent);
+    // Totals, By model and By project live on the Usage sub-tab now, and are
+    // asserted there instead.
     const must = [
       'Claude', 'Max (5x)', 'Current session', "Today's budget", 'All models',
-      'Total tokens', 'Output tokens', 'Est. cost', 'Sessions',
-      'Daily tokens (30 days)', 'By model', 'By project', 'Active sessions',
+      'Daily tokens (30 days)', 'Active sessions',
       'claude-sonnet-4-5', 'cloudcli-claude-limits', 'demo-project-1',
     ];
     const missing = must.filter((s) => !text.includes(s));
-    if (missing.length) firstRunErrors = missing;
+    if (missing.length) firstRunErrors.push(...missing);
 
     // Exercise the two-step Kill confirm: first click arms it, a click
     // elsewhere disarms it — no kill is ever actually sent (rpc stub above
@@ -283,6 +313,133 @@ for (const { theme, lang } of COMBOS) {
   const out = path.join(here, `preview-${theme}-${lang}.png`);
   await page.screenshot({ path: out, fullPage: true });
   console.log(`  ${theme}/${lang}: ${out}${errors.length ? `  ⚠ ${errors.length} console error(s)` : ''}`);
+
+  // ── the Usage sub-tab, in the two combos that cover both themes and both
+  //    languages between them (a 2x2 here would only add near-duplicate PNGs).
+  if (USAGE_SHOTS.some((c) => c.theme === theme && c.lang === lang)) {
+    const tabLabel = lang === 'ru' ? 'Расход' : 'Usage';
+    await page.evaluate((label) => {
+      const btn = [...document.querySelectorAll('.cld-tab')].find((b) => b.textContent === label);
+      if (btn) btn.click();
+    }, tabLabel);
+    await page.waitForTimeout(400);
+
+    if (lang === 'en') {
+      // ── the session-id control in the "Top sessions" card: the button
+      //    carries the full id and copies it, the link points at the host
+      //    panel's own /session/:id route.
+      const idCtl = await page.evaluate(() => {
+        const card = document.querySelector('.cld-usage-view .cld-mp-grid > div:nth-child(3)');
+        const btn = card && card.querySelector('.cld-sid-btn');
+        const link = card && card.querySelector('a.cld-open');
+        if (!btn || !link) return null;
+        return { short: btn.textContent, title: btn.title.split('\n')[0], href: link.getAttribute('href') };
+      });
+      if (!idCtl) {
+        firstRunErrors.push('top-sessions card has no session-id button/link');
+      } else {
+        const hrefOk = idCtl.href === `/session/${idCtl.title}`;
+        const shortOk = idCtl.title.startsWith(idCtl.short) && idCtl.title.length > idCtl.short.length;
+        console.log(
+          `  usage session-id link -> ${idCtl.href}: ${hrefOk && shortOk ? 'OK' : 'UNEXPECTED'}`,
+        );
+        if (!hrefOk) firstRunErrors.push(`session link href is ${idCtl.href}, want /session/${idCtl.title}`);
+        if (!shortOk) firstRunErrors.push('the button shows a shortened id but must carry the full one');
+
+        const copied = await page.evaluate(async () => {
+          const btn = document.querySelector('.cld-usage-view .cld-mp-grid > div:nth-child(3) .cld-sid-btn');
+          btn.click();
+          await new Promise((r) => setTimeout(r, 250));
+          return { marked: btn.classList.contains('cld-copied'), clip: await navigator.clipboard.readText() };
+        });
+        const copyOk = copied.marked && copied.clip === idCtl.title;
+        console.log(`  usage session-id copy: ${copyOk ? 'OK' : `UNEXPECTED (${JSON.stringify(copied)})`}`);
+        if (!copyOk) firstRunErrors.push('clicking the session id did not copy the full id');
+      }
+
+      // groupBy=session exercises the widest column set and the session
+      // aggregation; leave it selected for the screenshot.
+      await page.evaluate(() => {
+        const btn = [...document.querySelectorAll('.cld-seg button')].find((b) => b.textContent === 'Week');
+        if (btn) btn.click();
+      });
+      await page.waitForTimeout(300);
+      const weekOk = await page.evaluate(() =>
+        [...document.querySelectorAll('.cld-usage tbody tr td:first-child')].some((td) => /\d{4}-W\d{2}/.test(td.textContent)),
+      );
+      console.log(`  usage groupBy=week rows: ${weekOk ? 'OK' : 'UNEXPECTED (no ISO week keys)'}`);
+      if (!weekOk) firstRunErrors.push('groupBy=week produced no ISO-week rows');
+
+      await page.evaluate(() => {
+        const btn = [...document.querySelectorAll('.cld-seg button')].find((b) => b.textContent === 'Session');
+        if (btn) btn.click();
+      });
+      await page.waitForTimeout(300);
+      const usageText = await page.evaluate(() => document.querySelector('.cld-usage-view').textContent);
+      const missing = [
+        'Period', 'Group by', 'All projects', 'All models', 'Cache create', 'Duration', 'Breakdown',
+        // Moved here from the dashboard in 2.1.
+        'Total tokens', 'Output tokens', 'Est. cost', 'Sessions', 'Messages', 'By model', 'By project', 'Top sessions',
+      ].filter((x) => !usageText.includes(x));
+      if (missing.length) firstRunErrors.push(...missing.map((m) => `usage: ${m}`));
+
+      // The totals tiles and the two ranked cards moved here from the
+      // dashboard in 2.1, and the whole point of the move is that they answer
+      // to the Usage filters. Selecting one project must shrink all three.
+      const readWidgets = () =>
+        page.evaluate(() => ({
+          total: document.querySelector('.cld-usage-view .cld-stat-val').textContent,
+          models: document.querySelectorAll('.cld-usage-view .cld-mp-grid > div:nth-child(1) .cld-mp-row').length,
+          projects: document.querySelectorAll('.cld-usage-view .cld-mp-grid > div:nth-child(2) .cld-mp-row').length,
+          sessions: document.querySelectorAll('.cld-usage-view .cld-mp-grid > div:nth-child(3) .cld-mp-row').length,
+        }));
+      const before = await readWidgets();
+      await page.evaluate(() => {
+        const sel = document.querySelectorAll('.cld-usage-view select')[0];
+        sel.value = [...sel.options].map((o) => o.value).filter(Boolean)[0];
+        sel.dispatchEvent(new Event('change'));
+      });
+      await page.waitForTimeout(400);
+      const after = await readWidgets();
+      const filtered =
+        after.projects === 1 &&
+        before.projects > 1 &&
+        after.total !== before.total &&
+        after.sessions > 0 &&
+        after.sessions <= before.sessions;
+      console.log(
+        `  usage project filter drives the moved widgets: ${filtered ? 'OK' : 'UNEXPECTED'}` +
+          ` (total ${before.total}->${after.total}, by-project rows ${before.projects}->${after.projects},` +
+          ` top-session rows ${before.sessions}->${after.sessions})`,
+      );
+      if (!filtered) firstRunErrors.push('project filter did not narrow the totals / by-project card');
+      // Clear it again so the screenshot below shows the unfiltered view.
+      await page.evaluate(() => {
+        const sel = document.querySelectorAll('.cld-usage-view select')[0];
+        sel.value = '';
+        sel.dispatchEvent(new Event('change'));
+      });
+      await page.waitForTimeout(400);
+
+      // Sorting: clicking Cost twice must flip the order of the first row.
+      const sortFlips = await page.evaluate(() => {
+        const th = [...document.querySelectorAll('.cld-usage thead th')].find((x) => x.textContent.startsWith('Cost'));
+        const first = () => document.querySelector('.cld-usage tbody tr td:first-child')?.textContent;
+        // (In session mode this cell holds the id button — its text is still
+        //  the shortened id, so it remains a usable order fingerprint.)
+        const a = first();
+        th.click();
+        const b = first();
+        return a !== b;
+      });
+      console.log(`  usage cost sort toggles: ${sortFlips ? 'OK' : 'UNEXPECTED (order unchanged)'}`);
+    }
+
+    const usageOut = path.join(here, `preview-usage-${theme}-${lang}.png`);
+    await page.screenshot({ path: usageOut, fullPage: true });
+    console.log(`  ${theme}/${lang} usage: ${usageOut}`);
+  }
+
   for (const e of errors) console.log(`      ${e}`);
   await page.close();
 }

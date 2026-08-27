@@ -20,7 +20,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { computeDaily } from './daily.js';
-import { aggregate, parseTranscriptLine, projectLabel } from './history.js';
+import { aggregate, historyOptions, parseTranscriptLine, projectLabel } from './history.js';
 import { readClaudeSessions } from './sessions.js';
 import { getContext, killSession, resumeSession, cleanup } from './sessionActions.js';
 
@@ -436,8 +436,11 @@ function readSessionFile(file) {
   return entries;
 }
 
-/** @param {number} days */
-function getHistory(days) {
+/**
+ * Parse the transcript tree once and hand it to aggregate().
+ * @param {number|Parameters<typeof aggregate>[1]} daysOrOpts
+ */
+function getHistory(daysOrOpts) {
   const projectsDir = path.join(CLAUDE_DIR, 'projects');
   const sessions = [];
   let dirs = [];
@@ -457,13 +460,19 @@ function getHistory(days) {
     }
     for (const f of files) {
       try {
-        sessions.push({ project, entries: readSessionFile(path.join(projectsDir, dir.name, f)) });
+        // The transcript's file name is the session id — the frontend's
+        // per-session table is keyed on it, so it has to survive this hop.
+        sessions.push({
+          id: f.replace(/\.jsonl$/, ''),
+          project,
+          entries: readSessionFile(path.join(projectsDir, dir.name, f)),
+        });
       } catch {
         /* unreadable file — skip */
       }
     }
   }
-  return aggregate(sessions, days, Date.now());
+  return aggregate(sessions, daysOrOpts, Date.now());
 }
 
 // ── Request bodies ─────────────────────────────────────────────────────
@@ -513,10 +522,14 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  if (req.method === 'GET' && url.pathname.replace(/\/+$/, '') === '/history') {
+  // `/history` keeps its "last N days, default 30" default; `/usage` is the
+  // same handler with no implicit window, so an argument-less call means all
+  // time. Both accept since/until/groupBy/project/model.
+  const histPath = url.pathname.replace(/\/+$/, '');
+  if (req.method === 'GET' && (histPath === '/history' || histPath === '/usage')) {
     try {
-      const days = Math.min(Math.max(Number(url.searchParams.get('days')) || 30, 1), 365);
-      res.end(JSON.stringify(getHistory(days)));
+      const opts = historyOptions(url.searchParams, histPath === '/history' ? 30 : null);
+      res.end(JSON.stringify(getHistory(opts)));
     } catch (err) {
       res.writeHead(500);
       res.end(JSON.stringify({ ok: false, error: errMsg(err) }));

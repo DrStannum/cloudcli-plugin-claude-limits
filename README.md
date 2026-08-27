@@ -2,7 +2,9 @@
 
 Adds a **Claude** tab: a single full-width dashboard combining plan usage
 limits, 30-day token/cost history, and active-session management — what used
-to be three separate plugins (Claude Limits, Claude Usage, Session Manager).
+to be three separate plugins (Claude Limits, Claude Usage, Session Manager) —
+plus a **Usage** view for asking "what is eating my tokens?" across arbitrary
+date ranges, groupings, projects and sessions.
 
 ![what it looks like](preview.html)
 
@@ -11,20 +13,76 @@ to be three separate plugins (Claude Limits, Claude Usage, Session Manager).
 
 ## What's on the tab
 
+The tab has two sub-views, switched from the header (a CloudCLI plugin gets
+exactly one top-level tab slot, so the second view lives inside the first).
+
+### Dashboard (the default view)
+
+Deliberately short — three blocks, all "what is happening right now":
+
 1. **Plan usage limits** — one card per meter (current 5-hour session,
    today's rolling budget, weekly "All models", and any per-model weekly
    bucket that's actually been used). Each card shows a live `H:MM:SS`
    countdown to reset (ticking every second, independent of the data poll)
    plus a CSS progress bar colored by how close to the limit it is.
-2. **Stat tiles** — total tokens, output tokens, estimated cost, and session
-   count over the last 30 days.
-3. **Daily tokens (30 days)** — a bar chart, bar height proportional to that
+2. **Daily tokens (30 days)** — a bar chart, bar height proportional to that
    day's token total.
-4. **By model / by project** — ranked breakdowns of the same 30-day window.
-5. **Active sessions** — every Claude CLI session currently running or
+3. **Active sessions** — every Claude CLI session currently running or
    recently open on this host, with **Kill**, **Resume** (detached sessions
    only), and a **Cleanup** action (deletes orphaned session records, gzips
    transcripts untouched for 30+ days).
+
+Totals, "By model" and "By project" used to live here over a hardcoded
+30-day window; as of 2.1 they are on the Usage view — joined by "Top
+sessions" — where they answer to its period and filters instead.
+
+### Killing a session
+
+The **Kill** button requires a second click to confirm: the first click
+turns it into "Confirm?" for a few seconds (or until you click elsewhere,
+which cancels it); the second click actually sends `SIGTERM` (escalating to
+`SIGKILL` after 2s if the process is still alive). A toast confirms the
+result.
+
+### Usage
+
+A second view for spend analysis, modelled on `ccusage`'s
+`daily` / `weekly` / `monthly` / `session` reports:
+
+- **Period** — Today / 7d (the default) / 30d / All time, or a custom
+  `since`–`until` range from two date pickers. All bucketing is UTC.
+- **Group by** — Day / Week / Month / Session. Weeks are ISO-8601 (Monday
+  start, week 1 is the one containing the first Thursday), months are
+  calendar months. The bar chart and the table both follow the grouping;
+  session grouping has no time axis, so it drops the chart.
+- **Project** / **Model** — drill into one project or one model and every
+  number on the view, chart included, narrows to it. The dropdowns are built
+  from what the *unfiltered* range contains, so a filter can always be
+  cleared again.
+- **Totals** — total tokens, output tokens, estimated cost, sessions and
+  messages for the selected range and filters.
+- **By model / by project / top sessions** — ranked breakdowns of the same
+  range; the quickest read on where the spend went. "Top sessions" lists the
+  ten transcripts that burned the most tokens in the period.
+- **The session id is a control** — in the "Top sessions" card and in the
+  table, the shortened id is a button that copies the **full** id to the
+  clipboard, and the `↗` next to it links to the panel's own
+  `/session/<id>` route, which opens that conversation. (A plugin only
+  receives `{context, onContextChange, rpc}` — there is no navigation API —
+  so this is a plain `<a href>`, the same one CloudCLI's own recent-
+  conversation list uses. Copying falls back to a hidden `<textarea>` when
+  the panel isn't served from a secure context.)
+- **The table** — input / output / cache-create / cache-read / total tokens,
+  cost, and message count per bucket; in session mode also the (shortened)
+  session id, project, start, end, duration, and models used. Every column
+  sorts — click once for the biggest consumer first, again to flip. Sessions
+  default to total-tokens descending, periods to chronological.
+
+The chosen period and grouping persist in `localStorage` under
+`cloudcli-claude-limits:usageFilters`. The Usage query only runs for a tab
+someone is actually looking at — opening the plugin costs nothing extra.
+
+### Theme, language, refresh
 
 Both light/dark theme (follows the host panel) and English/Russian
 (`localStorage.userLanguage`, re-read on every poll — there's no change
@@ -37,20 +95,13 @@ like a narrow sidebar panel.
 countdown timers tick on their own 1-second timer and don't trigger a
 re-fetch.
 
-### Killing a session
-
-The **Kill** button requires a second click to confirm: the first click
-turns it into "Confirm?" for a few seconds (or until you click elsewhere,
-which cancels it); the second click actually sends `SIGTERM` (escalating to
-`SIGKILL` after 2s if the process is still alive). A toast confirms the
-result.
-
 ## How it works
 
 ```
 ┌ dist/server.js (Node subprocess, has HOME) ───────────────────────────────┐
 │  GET  /limits            → dist/server.js + dist/daily.js  (unchanged math) │
 │  GET  /history?days=30   → dist/history.js + dist/pricing.js               │
+│  GET  /usage?since=…&groupBy=…  → same aggregate(), arbitrary window       │
 │  GET  /sessions          → dist/sessions.js (readClaudeSessions)           │
 │  GET  /sessions/:pid/context → dist/sessionActions.js                      │
 │  POST /sessions/:pid/kill    → dist/sessionActions.js                      │
@@ -61,6 +112,7 @@ result.
 ┌ dist/index.js (tab frontend) ──────────────────────────────────────────────┐
 │  DOM built once in mount(); render(state) updates it in place.             │
 │  Data poll (selectable interval) + a separate 1s countdown-only tick.      │
+│  Two sub-views: Dashboard (polled) and Usage (its own filtered query).     │
 └──────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -77,15 +129,39 @@ carrying forward whole rather than being spread over the days still to
 come). Cached 5s;
 `GET /limits?force=1` skips the cache. It never rotates the refresh token.
 
-### Token/cost history (`GET /history?days=30`)
+### Token/cost history (`GET /history` and `GET /usage`)
 
 Ported from the `cloudcli-plugin-claude-usage` plugin (TypeScript → plain
 JS, same logic): walks `~/.claude/projects/**/*.jsonl`, parses each line
 that carries a `message.usage` block (`dist/history.js`), estimates cost
 per-model from a static price table (`dist/pricing.js`), and aggregates by
-day / model / project, deduping by `message.id`. Per-file parse results are
-cached by `mtimeMs`, so a poll only re-reads transcripts that actually
-changed.
+day / week / month / model / project / session, deduping by `message.id`.
+Per-file parse results are cached by `mtimeMs`, so a poll only re-reads
+transcripts that actually changed. Each transcript's file name is carried
+through as the session id.
+
+Both routes are the same handler over the same `aggregate()` and the same
+parse cache; they differ only in what an argument-less call means:
+
+| Route | Default window |
+|---|---|
+| `GET /history` | the last **30 days** (the pre-2.1 contract, unchanged) |
+| `GET /usage` | **all** recorded history |
+
+Shared query parameters:
+
+| Param | Values | Notes |
+|---|---|---|
+| `days` | `1`–`3650` | window of N days ending today; ignored if a range is given |
+| `since`, `until` | `YYYY-MM-DD` | UTC, both **inclusive** |
+| `groupBy` | `day` \| `week` \| `month` \| `session` | default `day` |
+| `project`, `model` | exact name | narrows the aggregation, not the facet lists |
+
+The response carries `daily` (always a zero-filled day series, which is what
+the dashboard chart draws), `periods` (the requested grouping, also
+zero-filled), `bySession`, `byModel`, `byProject`, `facets` (every project
+and model in the *unfiltered* window), `range`, `filters`, and `totals`.
+Zero-filled series are capped at the most recent 800 buckets.
 
 ### Sessions (`GET /sessions` and the action routes)
 
@@ -180,13 +256,14 @@ dist/history.js        # token/cost aggregation (ported from claude-usage)
 dist/pricing.js        # per-model $/M-token table (ported from claude-usage)
 dist/sessions.js        # read-only session inventory (ported from system-monitor)
 dist/sessionActions.js # kill/resume/cleanup/context (ported from session-manager)
-dist/index.js           # frontend: the 5-section dashboard              (authoritative)
+dist/index.js           # frontend: the Dashboard + Usage sub-views       (authoritative)
 src/types.d.ts          # PluginAPI / Limits types (for editor intellisense)
 probe.mjs               # standalone /limits endpoint checker
 preview.html            # generated static preview of the dashboard
 tests/daily.mjs         # unit tests for dist/daily.js
+tests/history.mjs       # unit tests for dist/history.js (ranges, week/month/session grouping, filters)
 tests/smoke.mjs         # backend integration test (mock upstream + isolated fake $HOME)
-tests/preview.mjs       # regenerates preview.html + Playwright screenshots (light/dark × en/ru)
+tests/preview.mjs       # regenerates preview.html + Playwright screenshots (light/dark × en/ru, + Usage)
 icon.svg
 ```
 
@@ -197,10 +274,11 @@ a plugin that needs compiling would install broken.
 Run the tests:
 
 ```bash
-npm test                  # all three
+npm test                  # all four
 node tests/daily.mjs      # today's-budget math
+node tests/history.mjs    # usage aggregation: ranges, groupings, sessions, filters
 node tests/smoke.mjs      # backend end-to-end: /limits, /history, /sessions, action routes
-node tests/preview.mjs    # dashboard render check + screenshots (needs Playwright)
+node tests/preview.mjs    # dashboard + Usage render check & screenshots (needs Playwright)
 ```
 
 ## Security notes

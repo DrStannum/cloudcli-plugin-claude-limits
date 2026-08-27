@@ -1,8 +1,8 @@
 {
   "name": "cloudcli-claude-limits",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "private": true,
-  "description": "CloudCLI UI plugin: a full-width Claude dashboard — plan usage limits with countdown timers, 30-day token/cost history (totals, daily chart, by model, by project), and an active-session table with kill/resume/cleanup.",
+  "description": "CloudCLI UI plugin: a full-width Claude dashboard — plan usage limits with countdown timers, 30-day token/cost history, an active-session table with kill/resume/cleanup, and a Usage view with day/week/month/session grouping and per-project/per-model breakdowns.",
   "author": "DrStannum",
   "license": "MIT",
   "homepage": "https://github.com/DrStannum/cloudcli-plugin-claude-limits#readme",
@@ -30,8 +30,9 @@
     "probe": "node probe.mjs",
     "smoke": "node tests/smoke.mjs",
     "daily": "node tests/daily.mjs",
+    "history": "node tests/history.mjs",
     "preview": "node tests/preview.mjs",
-    "test": "node tests/daily.mjs && node tests/smoke.mjs && node tests/preview.mjs"
+    "test": "node tests/daily.mjs && node tests/history.mjs && node tests/smoke.mjs && node tests/preview.mjs"
   },
   "engines": {
     "node": ">=18"

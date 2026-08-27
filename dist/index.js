@@ -34,6 +34,13 @@ const REFRESH_OPTIONS = [10_000, 30_000, 60_000, 180_000, 300_000, 0];
 /** The host panel's own language setting. */
 const HOST_LANG_KEY = 'userLanguage';
 
+/** Usage sub-tab filter state (period / grouping / breakdown), persisted. */
+const LS_USAGE_KEY = 'cloudcli-claude-limits:usageFilters';
+const PERIOD_PRESETS = ['today', '7d', '30d', 'all', 'custom'];
+const GROUP_BYS = ['day', 'week', 'month', 'session'];
+/** Rows rendered in the Usage table before it is truncated. */
+const MAX_TABLE_ROWS = 300;
+
 /** Severity thresholds for a usage meter: [warning, critical]. */
 const T_LIMIT = [75, 90];
 
@@ -86,6 +93,7 @@ const STRINGS = {
 
     byModel: 'By model',
     byProject: 'By project',
+    bySession: 'Top sessions',
     noData: 'No data.',
     historyError: '⚠ Could not load usage history',
 
@@ -128,6 +136,52 @@ const STRINGS = {
         ? `Cleanup: ${[del ? `${del} orphaned session${del !== 1 ? 's' : ''}` : null, comp ? `${comp} log${comp !== 1 ? 's' : ''} compressed` : null].filter(Boolean).join(', ')}`
         : 'Cleanup: nothing to do',
     toastCleanupFailed: (m) => `Cleanup failed: ${m}`,
+
+    tabDashboard: 'Dashboard',
+    tabUsage: 'Usage',
+    fPeriod: 'Period',
+    fGroup: 'Group by',
+    fProject: 'Project',
+    fModel: 'Model',
+    fRange: 'Custom range',
+    periodToday: 'Today',
+    period7d: '7d',
+    period30d: '30d',
+    periodAll: 'All time',
+    periodCustom: 'Custom',
+    groupDay: 'Day',
+    groupWeek: 'Week',
+    groupMonth: 'Month',
+    groupSession: 'Session',
+    allProjects: 'All projects',
+    allModels: 'All models',
+    dateSep: '\u2192',
+    statMessages: 'Messages',
+    usageChart: 'Tokens per period',
+    usageTable: 'Breakdown',
+    usageEmpty: 'No usage in this range.',
+    usageLoading: 'Loading\u2026',
+    usageError: '\u26a0 Could not load usage',
+    usageRange: (from, to) => `${from} \u2013 ${to}`,
+    showingRows: (n, total) => (n < total ? `showing ${n} of ${total}` : `${total} rows`),
+    thPeriod: 'Period',
+    thInput: 'Input',
+    thOutput: 'Output',
+    thCacheW: 'Cache create',
+    thCacheR: 'Cache read',
+    thTotal: 'Total',
+    thCost: 'Cost',
+    thMessages: 'Msgs',
+    thSessionId: 'Session',
+    thProject: 'Project',
+    thStart: 'Start',
+    thEnd: 'End',
+    thDuration: 'Duration',
+    thModels: 'Models',
+    copyId: 'Copy the full session id',
+    openSession: 'Open this session in the panel',
+    toastIdCopied: 'Session id copied',
+    toastCopyFailed: 'Could not copy — select the id and copy it manually',
   },
 
   ru: {
@@ -164,6 +218,7 @@ const STRINGS = {
 
     byModel: 'По моделям',
     byProject: 'По проектам',
+    bySession: 'Топ сессий',
     noData: 'Нет данных.',
     historyError: '⚠ Не удалось загрузить историю',
 
@@ -206,6 +261,55 @@ const STRINGS = {
         ? `Очистка: ${[del ? `${del} ${ruPlural(del, ['сессия', 'сессии', 'сессий'])} удалено` : null, comp ? `${comp} ${ruPlural(comp, ['журнал', 'журнала', 'журналов'])} сжато` : null].filter(Boolean).join(', ')}`
         : 'Очистка: нечего чистить',
     toastCleanupFailed: (m) => `Ошибка очистки: ${m}`,
+
+    tabDashboard: 'Дашборд',
+    tabUsage: 'Расход',
+    fPeriod: 'Период',
+    fGroup: 'Группировка',
+    fProject: 'Проект',
+    fModel: 'Модель',
+    fRange: 'Свой диапазон',
+    periodToday: 'Сегодня',
+    period7d: '7 дн',
+    period30d: '30 дн',
+    periodAll: 'За всё время',
+    periodCustom: 'Свой',
+    groupDay: 'День',
+    groupWeek: 'Неделя',
+    groupMonth: 'Месяц',
+    groupSession: 'Сессия',
+    allProjects: 'Все проекты',
+    allModels: 'Все модели',
+    dateSep: '\u2192',
+    statMessages: 'Сообщений',
+    usageChart: 'Токены по периодам',
+    usageTable: 'Разбивка',
+    usageEmpty: 'В этом диапазоне расхода нет.',
+    usageLoading: 'Загрузка\u2026',
+    usageError: '\u26a0 Не удалось загрузить расход',
+    usageRange: (from, to) => `${from} \u2013 ${to}`,
+    showingRows: (n, total) =>
+      n < total
+        ? `показано ${n} из ${total}`
+        : `${total} ${ruPlural(total, ['строка', 'строки', 'строк'])}`,
+    thPeriod: 'Период',
+    thInput: 'Вход',
+    thOutput: 'Выход',
+    thCacheW: 'Запись кэша',
+    thCacheR: 'Чтение кэша',
+    thTotal: 'Всего',
+    thCost: 'Стоимость',
+    thMessages: 'Сообщ.',
+    thSessionId: 'Сессия',
+    thProject: 'Проект',
+    thStart: 'Начало',
+    thEnd: 'Конец',
+    thDuration: 'Длительность',
+    thModels: 'Модели',
+    copyId: 'Скопировать полный id сессии',
+    openSession: 'Открыть эту сессию в панели',
+    toastIdCopied: 'ID сессии скопирован',
+    toastCopyFailed: 'Не удалось скопировать — выделите id и скопируйте вручную',
   },
 };
 
@@ -294,9 +398,6 @@ const CSS = `
   padding: 4px 6px; cursor: pointer;
 }
 
-.cld-section-title { font-size: 1rem; font-weight: 700; letter-spacing: -0.01em; margin: 28px 0 12px; }
-.cld-section-title:first-of-type { margin-top: 0; }
-
 .cld-card {
   background: var(--card); border: 1px solid var(--border);
   border-radius: 14px; padding: 16px 18px 18px; min-width: 0;
@@ -336,7 +437,7 @@ const CSS = `
 .cld-tip b { font-weight: 700; }
 
 /* By model / by project */
-.cld-mp-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.cld-mp-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; }
 .cld-mp-row { display: flex; justify-content: space-between; gap: 10px; padding: 5px 0; border-bottom: 1px solid var(--border); font-size: 0.8rem; }
 .cld-mp-row:last-child { border-bottom: none; }
 .cld-mp-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
@@ -395,6 +496,78 @@ table.cld-tbl tr:last-child td { border-bottom: none; }
 @media (prefers-reduced-motion: reduce) {
   .cld-fill, .cld-bar > i { transition: none; }
 }
+
+/* Sub-tabs (Dashboard / Usage). One CloudCLI plugin gets exactly one top-level
+   tab slot, so the second view lives in here rather than next to it. */
+.cld-tabs { display: inline-flex; gap: 2px; padding: 3px; border: 1px solid var(--border); border-radius: 10px; background: var(--card); }
+.cld-tab {
+  border: none; background: transparent; color: var(--muted);
+  font: inherit; font-size: 0.8rem; font-weight: 500;
+  padding: 5px 14px; border-radius: 7px; cursor: pointer;
+}
+.cld-tab:hover { color: var(--ink-2); }
+.cld-tab[aria-selected="true"] { background: color-mix(in srgb, var(--accent) 14%, var(--card)); color: var(--accent); }
+/* Same vertical rhythm the wrap gives its own children, now that the sections
+   are one level deeper. */
+.cld-view > * + * { margin-top: 24px; }
+
+/* Usage filter bar */
+.cld-filters { display: flex; flex-wrap: wrap; gap: 14px 20px; align-items: flex-end; }
+.cld-fgroup { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.cld-flabel { font-size: 0.68rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+.cld-seg { display: inline-flex; gap: 2px; padding: 3px; border: 1px solid var(--border); border-radius: 9px; background: var(--page); flex-wrap: wrap; }
+.cld-seg > button {
+  border: none; background: transparent; color: var(--ink-2);
+  font: inherit; font-size: 0.76rem; padding: 4px 11px; border-radius: 6px; cursor: pointer;
+}
+.cld-seg > button:hover { background: color-mix(in srgb, var(--ink) 6%, var(--page)); }
+.cld-seg > button[aria-pressed="true"] { background: var(--accent); color: #fff; }
+.cld-dates { display: flex; gap: 6px; align-items: center; font-size: 0.76rem; color: var(--muted); }
+.cld-date {
+  font: inherit; font-size: 0.76rem; color: var(--ink-2);
+  background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 4px 8px;
+}
+.cld-sel-wide { max-width: 220px; }
+
+/* Usage table */
+table.cld-tbl th.cld-sortable { cursor: pointer; user-select: none; }
+table.cld-tbl th.cld-sortable:hover { color: var(--ink-2); }
+table.cld-tbl th.cld-sorted { color: var(--accent); }
+table.cld-tbl th.cld-num, table.cld-tbl td.cld-num { text-align: right; font-variant-numeric: tabular-nums; padding-right: 14px; }
+table.cld-tbl td.cld-num { color: var(--ink-2); }
+table.cld-tbl td.cld-num-total { color: var(--ink); font-weight: 500; }
+table.cld-tbl td.cld-num-cost { color: var(--accent); }
+.cld-cell-ell { max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cld-sid { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.76rem; }
+/* Session id: a copy button plus a link to the host panel's own /session/:id
+   route — the same href CloudCLI's own recent-conversation list uses. Kept
+   side by side so the id reads as one control. */
+.cld-sid-cell { display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0; }
+.cld-sid-btn {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.76rem;
+  border: 1px solid var(--border); border-radius: 6px; background: var(--page);
+  color: var(--ink-2); padding: 1px 7px; cursor: pointer; line-height: 1.5;
+  transition: background .15s, color .15s, border-color .15s;
+}
+.cld-sid-btn:hover {
+  background: color-mix(in srgb, var(--accent) 12%, var(--card));
+  color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+}
+.cld-sid-btn.cld-copied {
+  background: color-mix(in srgb, var(--ok) 16%, var(--card));
+  color: var(--ok); border-color: color-mix(in srgb, var(--ok) 45%, var(--border));
+}
+.cld-open {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 20px; height: 20px; border-radius: 5px;
+  color: var(--muted); text-decoration: none;
+}
+.cld-open:hover { color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, var(--card)); }
+/* The ranked "Top sessions" rows carry the id control, so they need a little
+   more room between the columns than the plain by-model/by-project rows. */
+.cld-mp-row .cld-sid-cell + .cld-mp-name { margin-left: 2px; }
+@media (prefers-reduced-motion: reduce) { .cld-sid-btn { transition: none; } }
+.cld-table-foot { font-size: 0.74rem; color: var(--muted); margin-top: 10px; }
 `;
 
 // ── Formatting ─────────────────────────────────────────────────────────
@@ -639,37 +812,35 @@ export function mount(container, api) {
   refreshBtn.innerHTML =
     '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 4v5h-5"/></svg>';
   right.append(stamp, intervalLabel, refreshBtn);
-  head.append(titleBox, right);
+  const tabs = h('div', 'cld-tabs');
+  const tabDashBtn = h('button', 'cld-tab');
+  const tabUsageBtn = h('button', 'cld-tab');
+  tabDashBtn.type = 'button';
+  tabUsageBtn.type = 'button';
+  tabs.append(tabDashBtn, tabUsageBtn);
+  head.append(titleBox, tabs, right);
   wrap.append(head);
+
+  // The two sub-views. Only one is in the layout at a time; the tab switcher
+  // above toggles them.
+  const viewDash = h('div', 'cld-view');
+  const viewUsage = h('div', 'cld-view cld-usage-view');
+  viewUsage.style.display = 'none';
+  wrap.append(viewDash, viewUsage);
 
   // ── Section 1: limits
   const limitsGrid = h('div', 'cld-limits-grid');
-  wrap.append(limitsGrid);
+  viewDash.append(limitsGrid);
   /** @type {Map<string, ReturnType<typeof limitCard> & {resetsAtMs: number|null, kind: string}>} */
   const limitEls = new Map();
   const limitsErrBox = h('div', 'cld-err');
   limitsErrBox.style.display = 'none';
-  wrap.append(limitsErrBox);
+  viewDash.append(limitsErrBox);
 
-  // ── Section 2: stat tiles
-  const statsTitle = h('div', 'cld-section-title');
-  wrap.append(statsTitle);
-  const statsGrid = h('div', 'cld-stats-grid');
-  wrap.append(statsGrid);
-  function statTile() {
-    const el = h('div', 'cld-card');
-    const val = h('div', 'cld-stat-val', '—');
-    const label = h('div', 'cld-stat-label');
-    el.append(val, label);
-    statsGrid.append(el);
-    return { val, label };
-  }
-  const statTotal = statTile();
-  const statOutput = statTile();
-  const statCost = statTile();
-  const statSessions = statTile();
-
-  // ── Section 3: histogram
+  // ── Section 2: histogram
+  // (The totals tiles and the by-model / by-project rankings that used to sit
+  //  here moved to the Usage sub-tab, where they answer to its period and
+  //  project/model filters instead of a hardcoded 30 days.)
   const histCard = card();
   const chart = h('div', 'cld-chart');
   const chartCap = h('div', 'cld-chart-cap');
@@ -679,7 +850,7 @@ export function mount(container, api) {
   const histEmpty = h('div', 'cld-empty');
   histEmpty.style.display = 'none';
   histCard.el.append(chart, chartCap, histEmpty);
-  wrap.append(histCard.el);
+  viewDash.append(histCard.el);
   /** @type {{el: HTMLElement, bar: HTMLElement}[]} */
   let histBars = [];
 
@@ -701,18 +872,7 @@ export function mount(container, api) {
     chartTip.classList.remove('show');
   }
 
-  // ── Section 4: by model / by project
-  const mpGrid = h('div', 'cld-mp-grid');
-  const modelCard = card();
-  const modelRows = h('div');
-  modelCard.el.append(modelRows);
-  const projectCard = card();
-  const projectRows = h('div');
-  projectCard.el.append(projectRows);
-  mpGrid.append(modelCard.el, projectCard.el);
-  wrap.append(mpGrid);
-
-  // ── Section 5: sessions
+  // ── Section 3: sessions
   const sessCard = h('div', 'cld-card');
   const sessHead = h('div', 'cld-sess-head');
   const sessTitle = h('div', 'cld-card-t');
@@ -733,9 +893,624 @@ export function mount(container, api) {
   const sessEmpty = h('div', 'cld-empty');
   sessEmpty.style.display = 'none';
   sessCard.append(sessHead, sessTblWrap, sessEmpty);
-  wrap.append(sessCard);
+  viewDash.append(sessCard);
   /** @type {Map<string, any>} */
   const sessRowEls = new Map();
+
+  // ── Usage sub-tab ────────────────────────────────────────────────────
+  // Everything below builds the second view: a filter bar, four stat tiles,
+  // a per-period bar chart, and a sortable table. Same hand-rolled `h()` DOM
+  // as the rest of the file — the table body is the only part rebuilt from
+  // scratch on each render, because its row count and column set both change
+  // with the grouping.
+
+  /** Segmented control; exactly one value is pressed at a time. */
+  function segmented(values, onPick) {
+    const box = h('div', 'cld-seg');
+    const btns = values.map((v) => {
+      const b = h('button');
+      b.type = 'button';
+      b.dataset.value = v;
+      b.addEventListener('click', () => onPick(v));
+      box.append(b);
+      return b;
+    });
+    return {
+      box,
+      relabel(fn) {
+        btns.forEach((b, i) => (b.textContent = fn(values[i])));
+      },
+      select(v) {
+        btns.forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.value === v)));
+      },
+    };
+  }
+
+  /** Labelled column in the filter bar. */
+  function fgroup(control) {
+    const el = h('div', 'cld-fgroup');
+    const label = h('div', 'cld-flabel');
+    el.append(label, control);
+    return { el, label };
+  }
+
+  /** UTC YYYY-MM-DD, matching the backend's UTC bucketing. */
+  function isoDay(ms) {
+    return new Date(ms).toISOString().slice(0, 10);
+  }
+
+  const DEFAULT_USAGE_FILTERS = {
+    preset: '7d',
+    since: isoDay(Date.now() - 29 * 86_400_000),
+    until: isoDay(Date.now()),
+    groupBy: 'day',
+    project: '',
+    model: '',
+  };
+
+  function readUsageFilters() {
+    const f = { ...DEFAULT_USAGE_FILTERS };
+    try {
+      const raw = localStorage.getItem(LS_USAGE_KEY);
+      if (!raw) return f;
+      const p = JSON.parse(raw);
+      if (p && typeof p === 'object') {
+        if (PERIOD_PRESETS.includes(p.preset)) f.preset = p.preset;
+        if (GROUP_BYS.includes(p.groupBy)) f.groupBy = p.groupBy;
+        if (typeof p.since === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(p.since)) f.since = p.since;
+        if (typeof p.until === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(p.until)) f.until = p.until;
+        // Project/model are free-form strings from the data; they may no
+        // longer exist, in which case the select falls back to "all".
+        if (typeof p.project === 'string') f.project = p.project;
+        if (typeof p.model === 'string') f.model = p.model;
+      }
+    } catch {
+      /* storage unavailable or corrupt — defaults are fine */
+    }
+    return f;
+  }
+
+  function writeUsageFilters() {
+    try {
+      localStorage.setItem(LS_USAGE_KEY, JSON.stringify(usage.filters));
+    } catch {
+      /* non-fatal */
+    }
+  }
+
+  const usage = {
+    filters: readUsageFilters(),
+    /** @type {any} */
+    data: null,
+    /** @type {{col: string, dir: 1|-1}|null} null = the mode's own default */
+    sort: null,
+    loading: false,
+    loaded: false,
+  };
+
+  // ── filter bar
+  const usageFilterCard = h('div', 'cld-card');
+  const filterBar = h('div', 'cld-filters');
+  usageFilterCard.append(filterBar);
+  viewUsage.append(usageFilterCard);
+
+  const periodSeg = segmented(PERIOD_PRESETS, (v) => {
+    usage.filters.preset = v;
+    onFiltersChanged();
+  });
+  const periodGroup = fgroup(periodSeg.box);
+
+  const dates = h('div', 'cld-dates');
+  const sinceInput = /** @type {HTMLInputElement} */ (h('input', 'cld-date'));
+  sinceInput.type = 'date';
+  const untilInput = /** @type {HTMLInputElement} */ (h('input', 'cld-date'));
+  untilInput.type = 'date';
+  const dateSep = h('span');
+  dates.append(sinceInput, dateSep, untilInput);
+  const datesGroup = fgroup(dates);
+  for (const [input, key] of /** @type {[HTMLInputElement, 'since'|'until'][]} */ ([
+    [sinceInput, 'since'],
+    [untilInput, 'until'],
+  ])) {
+    input.addEventListener('change', () => {
+      if (!input.value) return;
+      usage.filters[key] = input.value;
+      // Editing a date is an implicit switch to the custom preset.
+      usage.filters.preset = 'custom';
+      onFiltersChanged();
+    });
+  }
+
+  const groupSeg = segmented(GROUP_BYS, (v) => {
+    usage.filters.groupBy = v;
+    usage.sort = null; // each mode has its own sensible default column
+    onFiltersChanged();
+  });
+  const groupGroup = fgroup(groupSeg.box);
+
+  const projectSel = /** @type {HTMLSelectElement} */ (h('select', 'cld-sel cld-sel-wide'));
+  const projectGroup = fgroup(projectSel);
+  const modelSel = /** @type {HTMLSelectElement} */ (h('select', 'cld-sel cld-sel-wide'));
+  const modelGroup = fgroup(modelSel);
+  projectSel.addEventListener('change', () => {
+    usage.filters.project = projectSel.value;
+    onFiltersChanged();
+  });
+  modelSel.addEventListener('change', () => {
+    usage.filters.model = modelSel.value;
+    onFiltersChanged();
+  });
+
+  filterBar.append(periodGroup.el, datesGroup.el, groupGroup.el, projectGroup.el, modelGroup.el);
+
+  // ── stat tiles
+  const usageStats = h('div', 'cld-stats-grid');
+  viewUsage.append(usageStats);
+  function usageTile() {
+    const el = h('div', 'cld-card');
+    const val = h('div', 'cld-stat-val', '—');
+    const label = h('div', 'cld-stat-label');
+    el.append(val, label);
+    usageStats.append(el);
+    return { val, label };
+  }
+  const uStatTotal = usageTile();
+  const uStatOutput = usageTile();
+  const uStatCost = usageTile();
+  const uStatSessions = usageTile();
+  const uStatMessages = usageTile();
+
+  // ── chart
+  const usageChartCard = card();
+  const usageChart = h('div', 'cld-chart');
+  const usageChartCap = h('div', 'cld-chart-cap');
+  const usageCapFrom = h('span');
+  const usageCapTo = h('span');
+  usageChartCap.append(usageCapFrom, usageCapTo);
+  usageChartCard.el.append(usageChart, usageChartCap);
+  viewUsage.append(usageChartCard.el);
+
+  // ── by model / by project
+  // Same ranked-row widget the dashboard used to carry, but fed by the Usage
+  // range and its filters — so "what is eating my tokens" is answerable for
+  // any period, not just the last 30 days.
+  const usageMpGrid = h('div', 'cld-mp-grid');
+  const usageModelCard = card();
+  const usageModelRows = h('div');
+  usageModelCard.el.append(usageModelRows);
+  const usageProjectCard = card();
+  const usageProjectRows = h('div');
+  usageProjectCard.el.append(usageProjectRows);
+  const usageSessionCard = card();
+  const usageSessionRows = h('div');
+  usageSessionCard.el.append(usageSessionRows);
+  usageMpGrid.append(usageModelCard.el, usageProjectCard.el, usageSessionCard.el);
+  viewUsage.append(usageMpGrid);
+
+  // ── table
+  const usageTableCard = h('div', 'cld-card cld-usage');
+  const usageTableHead = h('div', 'cld-sess-head');
+  const usageTableTitle = h('div', 'cld-card-t');
+  const usageTableSub = h('span', 'cld-card-s');
+  usageTableHead.append(usageTableTitle, usageTableSub);
+  const usageTbl = h('table', 'cld-tbl');
+  const usageThead = h('thead');
+  const usageHeadRow = h('tr');
+  usageThead.append(usageHeadRow);
+  const usageTbody = h('tbody');
+  usageTbl.append(usageThead, usageTbody);
+  const usageTblWrap = h('div', 'cld-tbl-wrap');
+  usageTblWrap.append(usageTbl);
+  const usageEmptyEl = h('div', 'cld-empty');
+  const usageFoot = h('div', 'cld-table-foot');
+  usageTableCard.append(usageTableHead, usageTblWrap, usageEmptyEl, usageFoot);
+  viewUsage.append(usageTableCard);
+
+  // ── column definitions
+  // `get` is the sort key, `cell` the rendered text, `cls` an extra td class.
+  const PERIOD_COLS = [
+    { key: 'period', label: () => t.thPeriod, get: (r) => r.startMs, cell: (r) => fmtPeriod(r) },
+    { key: 'input', num: true, label: () => t.thInput, get: (r) => r.tokens.input, cell: (r) => num(r.tokens.input, 0) },
+    { key: 'output', num: true, label: () => t.thOutput, get: (r) => r.tokens.output, cell: (r) => num(r.tokens.output, 0) },
+    { key: 'cacheCreate', num: true, label: () => t.thCacheW, get: (r) => r.tokens.cacheCreate, cell: (r) => num(r.tokens.cacheCreate, 0) },
+    { key: 'cacheRead', num: true, label: () => t.thCacheR, get: (r) => r.tokens.cacheRead, cell: (r) => num(r.tokens.cacheRead, 0) },
+    { key: 'total', num: true, cls: 'cld-num-total', label: () => t.thTotal, get: (r) => totalOf(r.tokens), cell: (r) => num(totalOf(r.tokens), 0) },
+    { key: 'cost', num: true, cls: 'cld-num-cost', label: () => t.thCost, get: (r) => r.cost ?? 0, cell: (r) => fmtCost(r.cost) },
+    { key: 'messages', num: true, label: () => t.thMessages, get: (r) => r.messages, cell: (r) => num(r.messages, 0) },
+  ];
+
+  const SESSION_COLS = [
+    {
+      key: 'session', label: () => t.thSessionId, get: (r) => r.sessionId || '',
+      render: (td, r) => td.append(sessionIdCell(r)),
+    },
+    { key: 'project', label: () => t.thProject, get: (r) => r.project, cell: (r) => r.project, cls: 'cld-cell-ell', title: (r) => r.project },
+    { key: 'start', label: () => t.thStart, get: (r) => r.startMs, cell: (r) => fmtStamp(r.startMs) },
+    { key: 'end', label: () => t.thEnd, get: (r) => r.endMs, cell: (r) => fmtStamp(r.endMs) },
+    { key: 'duration', num: true, label: () => t.thDuration, get: (r) => r.durationMs, cell: (r) => dur(r.durationMs / 1000) },
+    { key: 'input', num: true, label: () => t.thInput, get: (r) => r.tokens.input, cell: (r) => num(r.tokens.input, 0) },
+    { key: 'output', num: true, label: () => t.thOutput, get: (r) => r.tokens.output, cell: (r) => num(r.tokens.output, 0) },
+    { key: 'cacheCreate', num: true, label: () => t.thCacheW, get: (r) => r.tokens.cacheCreate, cell: (r) => num(r.tokens.cacheCreate, 0) },
+    { key: 'cacheRead', num: true, label: () => t.thCacheR, get: (r) => r.tokens.cacheRead, cell: (r) => num(r.tokens.cacheRead, 0) },
+    { key: 'total', num: true, cls: 'cld-num-total', label: () => t.thTotal, get: (r) => totalOf(r.tokens), cell: (r) => num(totalOf(r.tokens), 0) },
+    { key: 'cost', num: true, cls: 'cld-num-cost', label: () => t.thCost, get: (r) => r.cost ?? 0, cell: (r) => fmtCost(r.cost) },
+    { key: 'models', label: () => t.thModels, get: (r) => r.models.join(','), cell: (r) => r.models.map(shortModel).join(', '), cls: 'cld-cell-ell', title: (r) => r.models.join(', ') },
+  ];
+
+  /**
+   * Copy `text`, preferring the async clipboard API and falling back to a
+   * throwaway <textarea> when the panel isn't served from a secure context.
+   * @param {string} text @returns {Promise<boolean>}
+   */
+  async function copyText(text) {
+    try {
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(text);
+        return true;
+      }
+    } catch {
+      /* fall through to the legacy path */
+    }
+    try {
+      const ta = /** @type {HTMLTextAreaElement} */ (h('textarea'));
+      ta.value = text;
+      ta.setAttribute('readonly', '');
+      Object.assign(ta.style, { position: 'fixed', top: '-1000px', opacity: '0' });
+      document.body.appendChild(ta);
+      ta.select();
+      const done = document.execCommand('copy');
+      ta.remove();
+      return done;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * The session id as a copy button plus a link to the host's /session/:id
+   * route. Shared by the "Top sessions" card and the Breakdown table so the
+   * two behave identically.
+   *
+   * The link is a plain <a>, not a router call: a plugin only ever gets
+   * {context, onContextChange, rpc} — there is no navigation API — so an
+   * unknown id fails exactly the way the host's own stale links already do.
+   * @param {any} r a bySession row @returns {HTMLElement}
+   */
+  function sessionIdCell(r) {
+    const cell = h('span', 'cld-sid-cell');
+    const id = r.sessionId ? String(r.sessionId) : '';
+    if (!id) {
+      cell.append(h('span', 'cld-sid', '—'));
+      return cell;
+    }
+    const btn = h('button', 'cld-sid-btn', shortId(id));
+    btn.type = 'button';
+    btn.title = `${id}\n${t.copyId}`;
+    btn.setAttribute('aria-label', `${t.copyId}: ${id}`);
+    /** @type {ReturnType<typeof setTimeout>|null} */
+    let revert = null;
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const done = await copyText(id);
+      toast(done ? t.toastIdCopied : t.toastCopyFailed);
+      if (!done) return;
+      btn.classList.add('cld-copied');
+      if (revert) clearTimeout(revert);
+      revert = setTimeout(() => btn.classList.remove('cld-copied'), 1200);
+    });
+    const link = /** @type {HTMLAnchorElement} */ (h('a', 'cld-open'));
+    link.href = `/session/${encodeURIComponent(id)}`;
+    link.title = t.openSession;
+    link.setAttribute('aria-label', t.openSession);
+    link.innerHTML =
+      '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 17 17 7"/><path d="M8 7h9v9"/></svg>';
+    cell.append(btn, link);
+    return cell;
+  }
+
+  /** Ranked "Top sessions" rows: id control, project, tokens, cost. */
+  function renderSessionRanked(container, rows) {
+    container.innerHTML = '';
+    if (!rows || !rows.length) {
+      container.append(h('div', 'cld-empty', t.noData));
+      return;
+    }
+    for (const r of rows) {
+      const row = h('div', 'cld-mp-row');
+      const name = h('div', 'cld-mp-name', r.project);
+      name.title = `${r.project} · ${fmtStamp(r.startMs)} · ${dur(r.durationMs / 1000)}`;
+      row.append(sessionIdCell(r), name, h('div', 'cld-mp-tok', fmtTokens(totalOf(r.tokens))));
+      row.append(h('div', 'cld-mp-cost', fmtCost(r.cost)));
+      container.append(row);
+    }
+  }
+
+  /** First segment of a session UUID — enough to tell rows apart. */
+  function shortId(id) {
+    return id ? String(id).split('-')[0] : '—';
+  }
+  /** "claude-sonnet-4-5" -> "sonnet-4-5"; the vendor prefix is noise here. */
+  function shortModel(m) {
+    return String(m).replace(/^claude-/, '');
+  }
+  /** "Aug 18, 14:05" */
+  function fmtStamp(ms) {
+    if (!Number.isFinite(ms)) return '—';
+    try {
+      return new Date(ms).toLocaleString(t.locale, {
+        month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
+      });
+    } catch {
+      return new Date(ms).toISOString().slice(0, 16).replace('T', ' ');
+    }
+  }
+  /** Human label for one bucket of the current grouping. */
+  function fmtPeriod(r) {
+    const g = usage.filters.groupBy;
+    if (g === 'day') return fmtChartDate(r.key);
+    if (g === 'month') {
+      try {
+        return new Date(`${r.key}-15T12:00:00Z`).toLocaleDateString(t.locale, { month: 'long', year: 'numeric' });
+      } catch {
+        return r.key;
+      }
+    }
+    // Weeks: the ISO key plus the Monday it starts on, which is what makes it
+    // readable — "2026-W35" on its own says nothing about the calendar.
+    return `${r.key} · ${fmtChartDate(isoDay(r.startMs))}`;
+  }
+
+  const usageThs = [];
+  function rebuildHeader(cols) {
+    usageHeadRow.innerHTML = '';
+    usageThs.length = 0;
+    const sort = effectiveSort(cols);
+    for (const c of cols) {
+      const th = h('th', `cld-sortable${c.num ? ' cld-num' : ''}${sort.col === c.key ? ' cld-sorted' : ''}`);
+      th.textContent = c.label() + (sort.col === c.key ? (sort.dir < 0 ? ' ↓' : ' ↑') : '');
+      th.addEventListener('click', () => {
+        const cur = effectiveSort(cols);
+        // Same column flips direction; a new column starts descending for
+        // numbers (biggest consumer first) and ascending for text/time.
+        usage.sort =
+          cur.col === c.key
+            ? { col: c.key, dir: /** @type {1|-1} */ (-cur.dir) }
+            : { col: c.key, dir: /** @type {1|-1} */ (c.num ? -1 : 1) };
+        renderUsage();
+      });
+      usageHeadRow.append(th);
+      usageThs.push(th);
+    }
+  }
+
+  /** The user's pick, or the mode default: sessions by total desc, periods by time asc. */
+  function effectiveSort(cols) {
+    if (usage.sort && cols.some((c) => c.key === usage.sort.col)) return usage.sort;
+    return usage.filters.groupBy === 'session'
+      ? { col: 'total', dir: /** @type {1|-1} */ (-1) }
+      : { col: 'period', dir: /** @type {1|-1} */ (1) };
+  }
+
+  // ── query + load
+  function usageQuery() {
+    const f = usage.filters;
+    const q = new URLSearchParams();
+    q.set('groupBy', f.groupBy);
+    const today = isoDay(Date.now());
+    const back = (n) => isoDay(Date.now() - n * 86_400_000);
+    if (f.preset === 'today') {
+      q.set('since', today);
+      q.set('until', today);
+    } else if (f.preset === '7d') {
+      q.set('since', back(6));
+      q.set('until', today);
+    } else if (f.preset === '30d') {
+      q.set('since', back(29));
+      q.set('until', today);
+    } else if (f.preset === 'custom') {
+      if (f.since) q.set('since', f.since);
+      if (f.until) q.set('until', f.until);
+    }
+    // 'all' sends neither bound; the backend then starts at the oldest entry.
+    if (f.project) q.set('project', f.project);
+    if (f.model) q.set('model', f.model);
+    return q.toString();
+  }
+
+  function onFiltersChanged() {
+    writeUsageFilters();
+    loadUsage();
+  }
+
+  async function loadUsage() {
+    usage.loading = true;
+    renderUsage();
+    let data;
+    try {
+      data = await api.rpc('GET', `usage?${usageQuery()}`);
+    } catch (e) {
+      data = { error: errMsg(e) };
+    }
+    usage.data = data;
+    usage.loading = false;
+    usage.loaded = true;
+    renderUsage();
+  }
+
+  /** Rebuild the two breakdown dropdowns from the range's facets. */
+  function syncFacetSelect(sel, values, allLabel, current) {
+    // Keep a filter the current range no longer contains, so switching periods
+    // can't silently drop it.
+    const opts = ['', ...values];
+    if (current && !opts.includes(current)) opts.push(current);
+    const want = opts.join(' ');
+    if (sel.dataset.opts !== want) {
+      sel.innerHTML = '';
+      for (const v of opts) {
+        const o = /** @type {HTMLOptionElement} */ (h('option'));
+        o.value = v;
+        o.textContent = v || allLabel;
+        sel.append(o);
+      }
+      sel.dataset.opts = want;
+    } else {
+      sel.options[0].textContent = allLabel; // language switch
+    }
+    sel.value = current;
+  }
+
+  function renderUsage() {
+    // Static bits first — they also have to follow a language switch.
+    tabDashBtn.textContent = t.tabDashboard;
+    tabUsageBtn.textContent = t.tabUsage;
+    periodGroup.label.textContent = t.fPeriod;
+    datesGroup.label.textContent = t.fRange;
+    groupGroup.label.textContent = t.fGroup;
+    projectGroup.label.textContent = t.fProject;
+    modelGroup.label.textContent = t.fModel;
+    dateSep.textContent = t.dateSep;
+    periodSeg.relabel((v) =>
+      v === 'today' ? t.periodToday : v === '7d' ? t.period7d : v === '30d' ? t.period30d : v === 'all' ? t.periodAll : t.periodCustom,
+    );
+    groupSeg.relabel((v) =>
+      v === 'day' ? t.groupDay : v === 'week' ? t.groupWeek : v === 'month' ? t.groupMonth : t.groupSession,
+    );
+    periodSeg.select(usage.filters.preset);
+    groupSeg.select(usage.filters.groupBy);
+    sinceInput.value = usage.filters.since;
+    untilInput.value = usage.filters.until;
+    // Dimmed rather than hidden: the inputs stay clickable, and touching one
+    // is itself the way to switch to the custom preset.
+    datesGroup.el.style.opacity = usage.filters.preset === 'custom' ? '1' : '0.55';
+    uStatTotal.label.textContent = t.statTotal;
+    uStatOutput.label.textContent = t.statOutput;
+    uStatCost.label.textContent = t.statCost;
+    uStatSessions.label.textContent = t.statSessions;
+    uStatMessages.label.textContent = t.statMessages;
+    usageChartCard.title.textContent = t.usageChart;
+    usageModelCard.title.textContent = t.byModel;
+    usageProjectCard.title.textContent = t.byProject;
+    usageSessionCard.title.textContent = t.bySession;
+    usageTableTitle.textContent = t.usageTable;
+
+    const d = usage.data;
+    const ok = d && !d.error && d.totals && Array.isArray(d.periods);
+    if (!ok) {
+      for (const tile of [uStatTotal, uStatOutput, uStatCost, uStatSessions, uStatMessages]) {
+        tile.val.textContent = '—';
+      }
+      renderRankedRows(usageModelRows, null, (r) => r.model);
+      renderRankedRows(usageProjectRows, null, (r) => r.project);
+      renderSessionRanked(usageSessionRows, null);
+      usageChartCard.el.style.display = 'none';
+      usageTblWrap.style.display = 'none';
+      usageFoot.textContent = '';
+      usageEmptyEl.style.display = '';
+      usageEmptyEl.textContent = usage.loading
+        ? t.usageLoading
+        : d && d.error
+          ? `${t.usageError} — ${d.error}`
+          : t.usageEmpty;
+      usageChartCard.sub.textContent = '';
+      usageTableSub.textContent = '';
+      return;
+    }
+
+    syncFacetSelect(projectSel, (d.facets && d.facets.projects) || [], t.allProjects, usage.filters.project);
+    syncFacetSelect(modelSel, (d.facets && d.facets.models) || [], t.allModels, usage.filters.model);
+
+    uStatTotal.val.textContent = fmtTokens(totalOf(d.totals.tokens));
+    uStatOutput.val.textContent = fmtTokens(d.totals.tokens.output);
+    uStatCost.val.textContent = fmtCost(d.totals.cost);
+    uStatSessions.val.textContent = num(d.totals.sessions, 0);
+    uStatMessages.val.textContent = num(d.totals.messages, 0);
+
+    renderRankedRows(usageModelRows, d.byModel, (r) => r.model);
+    renderRankedRows(usageProjectRows, (d.byProject || []).slice(0, 10), (r) => r.project);
+    // bySession already comes back sorted by total tokens, descending — this
+    // card is just its head, for "which sessions ate the period".
+    renderSessionRanked(usageSessionRows, (d.bySession || []).slice(0, 10));
+
+    const rangeText = t.usageRange(isoDay(d.range.sinceMs), isoDay(d.range.untilMs - 1));
+    usageChartCard.sub.textContent = rangeText;
+
+    // Chart: the grouped series. Hidden for session grouping — sessions have
+    // no shared time axis to lay bars out on.
+    const bySession = usage.filters.groupBy === 'session';
+    const periods = d.periods || [];
+    if (bySession || !periods.length || d.totals.messages === 0) {
+      usageChartCard.el.style.display = 'none';
+    } else {
+      usageChartCard.el.style.display = '';
+      usageChart.innerHTML = '';
+      const max = Math.max(1, ...periods.map((p) => totalOf(p.tokens)));
+      periods.forEach((p, i) => {
+        const el = h('div', 'cld-bar');
+        const bar = h('i');
+        el.append(bar);
+        const tok = totalOf(p.tokens);
+        bar.style.height = `${tok > 0 ? Math.max(Math.round((tok / max) * 100), 3) : 0}%`;
+        bar.style.opacity = String(0.45 + 0.55 * (i / periods.length));
+        el.dataset.tipDate = fmtPeriod(p);
+        el.dataset.tipTok = tok.toLocaleString(t.locale);
+        el.dataset.tipCost = fmtCost(p.cost);
+        el.addEventListener('mouseenter', (ev) => showChartTip(ev, el));
+        el.addEventListener('mousemove', (ev) => positionChartTip(ev, el));
+        el.addEventListener('mouseleave', hideChartTip);
+        usageChart.append(el);
+      });
+      usageCapFrom.textContent = periods[0].key;
+      usageCapTo.textContent = periods[periods.length - 1].key;
+    }
+
+    // Table. Empty buckets are dropped here (they are still drawn in the
+    // chart, where the gap is the point).
+    const cols = bySession ? SESSION_COLS : PERIOD_COLS;
+    const rows = bySession ? (d.bySession || []).slice() : periods.filter((p) => p.messages > 0);
+    const sort = effectiveSort(cols);
+    const col = cols.find((c) => c.key === sort.col) || cols[0];
+    rows.sort((a, b) => {
+      const va = col.get(a);
+      const vb = col.get(b);
+      const cmp = typeof va === 'string' ? String(va).localeCompare(String(vb), t.locale) : va - vb;
+      return cmp * sort.dir;
+    });
+
+    rebuildHeader(cols);
+    usageTbody.innerHTML = '';
+    const shown = rows.slice(0, MAX_TABLE_ROWS);
+    for (const r of shown) {
+      const tr = h('tr');
+      for (const c of cols) {
+        const cls = [c.num ? 'cld-num' : null, c.cls || null].filter(Boolean).join(' ');
+        const td = h('td', cls || undefined, c.render ? undefined : c.cell(r));
+        if (c.render) c.render(td, r);
+        if (c.title) td.title = c.title(r);
+        tr.append(td);
+      }
+      usageTbody.append(tr);
+    }
+    usageTblWrap.style.display = rows.length ? '' : 'none';
+    usageEmptyEl.style.display = rows.length ? 'none' : '';
+    usageEmptyEl.textContent = t.usageEmpty;
+    usageTableSub.textContent = rangeText;
+    usageFoot.textContent = rows.length ? t.showingRows(shown.length, rows.length) : '';
+  }
+
+  // ── tab switching
+  let activeTab = 'dashboard';
+  function selectTab(name) {
+    activeTab = name === 'usage' ? 'usage' : 'dashboard';
+    viewDash.style.display = activeTab === 'dashboard' ? '' : 'none';
+    viewUsage.style.display = activeTab === 'usage' ? '' : 'none';
+    tabDashBtn.setAttribute('aria-selected', String(activeTab === 'dashboard'));
+    tabUsageBtn.setAttribute('aria-selected', String(activeTab === 'usage'));
+    // The Usage query can span all of history, unlike the dashboard's fixed
+    // 30 days — so it only ever runs for a tab someone is looking at.
+    if (activeTab === 'usage' && !usage.loaded && !usage.loading) loadUsage();
+  }
+  tabDashBtn.addEventListener('click', () => selectTab('dashboard'));
+  tabUsageBtn.addEventListener('click', () => selectTab('usage'));
 
   // ── state
   const state = { limits: null, history: null, sessions: [] };
@@ -774,15 +1549,8 @@ export function mount(container, api) {
     });
     refreshBtn.title = t.refresh;
     refreshBtn.setAttribute('aria-label', t.refresh);
-    statsTitle.textContent = '';
-    statTotal.label.textContent = t.statTotal;
-    statOutput.label.textContent = t.statOutput;
-    statCost.label.textContent = t.statCost;
-    statSessions.label.textContent = t.statSessions;
     histCard.title.textContent = t.histTitle;
     histEmpty.textContent = t.histEmpty;
-    modelCard.title.textContent = t.byModel;
-    projectCard.title.textContent = t.byProject;
     sessTitle.textContent = t.sessionsTitle;
     cleanupBtn.textContent = cleanupBtn.dataset.busy === '1' ? t.cleaningUp : t.cleanup;
     sessThs[0].textContent = t.thSession;
@@ -793,6 +1561,9 @@ export function mount(container, api) {
     sessThs[5].textContent = t.thMem;
     sessThs[6].textContent = t.thActions;
     sessEmpty.textContent = t.sessNone;
+    // The Usage view has no separate static pass — its labels are all set at
+    // the top of renderUsage(), which is idempotent and cheap when idle.
+    renderUsage();
   }
 
   function applyTheme() {
@@ -866,32 +1637,19 @@ export function mount(container, api) {
     }
   }
 
-  // ── stats + histogram + by model/project render
+  // ── histogram render (the dashboard's only /history consumer)
   function renderHistory() {
     const hRaw = state.history;
     const ok = hRaw && Array.isArray(hRaw.daily) && hRaw.totals;
     if (!ok) {
-      statTotal.val.textContent = '—';
-      statOutput.val.textContent = '—';
-      statCost.val.textContent = '—';
-      statSessions.val.textContent = '—';
       chart.style.display = 'none';
       chartCap.style.display = 'none';
       histEmpty.style.display = '';
       histEmpty.textContent = hRaw && hRaw.error ? `${t.historyError} — ${hRaw.error}` : t.histEmpty;
-      modelRows.innerHTML = '';
-      modelRows.append(h('div', 'cld-empty', t.noData));
-      projectRows.innerHTML = '';
-      projectRows.append(h('div', 'cld-empty', t.noData));
       return;
     }
 
     const totals = hRaw.totals;
-    statTotal.val.textContent = fmtTokens(totalOf(totals.tokens));
-    statOutput.val.textContent = fmtTokens(totals.tokens.output);
-    statCost.val.textContent = fmtCost(totals.cost);
-    statSessions.val.textContent = String(totals.sessions);
-
     const daily = hRaw.daily;
     if (!daily.length || totals.messages === 0) {
       chart.style.display = 'none';
@@ -929,12 +1687,9 @@ export function mount(container, api) {
       chartCapFrom.textContent = daily[0]?.date ?? '';
       chartCapTo.textContent = daily[daily.length - 1]?.date ?? '';
     }
-
-    renderRankedRows(modelRows, hRaw.byModel, (r) => r.model);
-    renderRankedRows(projectRows, hRaw.byProject.slice(0, 10), (r) => r.project);
   }
 
-  /** @param {HTMLElement} container @param {any[]} rows @param {(r:any)=>string} nameOf */
+  /** @param {HTMLElement} container @param {any[]|null} rows @param {(r:any)=>string} nameOf */
   function renderRankedRows(container, rows, nameOf) {
     container.innerHTML = '';
     if (!rows || !rows.length) {
@@ -1098,6 +1853,7 @@ export function mount(container, api) {
     renderLimits();
     renderHistory();
     renderSessions();
+    if (activeTab === 'usage') renderUsage();
   }
 
   // ── loading
@@ -1119,6 +1875,9 @@ export function mount(container, api) {
     state.sessions = sessionsR && sessionsR.ok && Array.isArray(sessionsR.sessions) ? sessionsR.sessions : [];
     loading = false;
     render();
+    // The Usage view has its own query; keep it in step with the poll, but
+    // only once it has been opened at least once.
+    if (activeTab === 'usage' && usage.loaded && !usage.loading) loadUsage();
   }
 
   function armDataTimer() {
@@ -1167,6 +1926,7 @@ export function mount(container, api) {
 
   applyTheme();
   applyStaticText();
+  selectTab('dashboard');
   render();
   load(true);
   armDataTimer();
