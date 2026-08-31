@@ -121,8 +121,8 @@ ok(all?.resetsAtMs > 1e12, 'All models resetsAtMs from ISO');
 ok(fable?.usedPct === 0, `Fable 0, got ${fable?.usedPct}`);
 ok(fable?.resetsAtMs > 1e12, 'Fable resetsAtMs from ms');
 ok(
-  typeof r.data?.daily?.valueText === 'string' && /^\d+\/\d+%$/.test(r.data.daily.valueText),
-  `daily valueText "used/budget%" (statusline "$tu/$tb%" format), got ${r.data?.daily?.valueText}`,
+  typeof r.data?.daily?.valueText === 'string' && /^\d+% \u2192 \d+%$/.test(r.data.daily.valueText),
+  `daily valueText "dayStart% \u2192 ceiling%", got ${r.data?.daily?.valueText}`,
 );
 // The weekly reset in the mock puts us at the very start of a period, so
 // nothing has been spent today yet — the pre-fix code reported the cycle

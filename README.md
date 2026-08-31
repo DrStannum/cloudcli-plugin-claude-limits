@@ -126,8 +126,22 @@ Unchanged from the pre-2.0 plugin. The backend reads
 `~/.claude/cloudcli-claude-limits-history.json` (see that file's header
 comment for the math: a plain 1/7 a day, with unspent allowance
 carrying forward whole rather than being spread over the days still to
-come). Cached 5s;
-`GET /limits?force=1` skips the cache. It never rotates the refresh token.
+come).
+
+The "Today's budget" card captions that band rather than a bare ratio:
+`28% → 42%` means the weekly counter stood at 28% when today's period
+opened (periods are anchored to the weekly reset, not to local midnight)
+and may reach 42% — `(N+1)/7` on day N — before it closes. The bar fills
+that stretch: how far today's spend has travelled from the left number
+towards the right one. A leading `~` marks a day whose starting reading
+was reconstructed rather than measured; the tooltip says so.
+
+Cached 10 minutes — the numbers move slowly and a dashboard left open all
+day should not poll the endpoint every few seconds (the API rate-limits).
+The Refresh button sends `GET /limits?force=1`, which skips the cache; the
+header stamp shows the data's real age and appends `· cached` when it came
+from there. `daily.js`'s `GRACE_SEC` is kept above this TTL, since snapshots
+are only taken on a live fetch. It never rotates the refresh token.
 
 ### Token/cost history (`GET /history` and `GET /usage`)
 

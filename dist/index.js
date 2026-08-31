@@ -70,6 +70,7 @@ const STRINGS = {
     justNow: 'just now',
     agoSec: (s) => `${s}s ago`,
     agoMin: (m) => `${m}m ago`,
+    agoHour: (h) => `${h}h ago`,
 
     limitSession: 'Current session',
     limitDaily: "Today's budget",
@@ -78,7 +79,9 @@ const STRINGS = {
     resetsAt: (s) => `Resets ${s}`,
     resetsNow: 'Resets now',
     used: (p) => `${p}% used`,
-    estimated: ' (est.)',
+    estimatedMark: '~',
+    estimatedHint:
+      "Approximate: the weekly reading at the start of today's period was reconstructed, not measured.",
     noLimitData: 'No limit data.',
     limitsError: '⚠ Could not load usage limits',
 
@@ -195,6 +198,7 @@ const STRINGS = {
     justNow: 'сейчас',
     agoSec: (s) => `${s} с назад`,
     agoMin: (m) => `${m} мин назад`,
+    agoHour: (h) => `${h} ч назад`,
 
     limitSession: 'Текущая сессия',
     limitDaily: 'Бюджет на сегодня',
@@ -203,7 +207,9 @@ const STRINGS = {
     resetsAt: (s) => `Сброс ${s}`,
     resetsNow: 'Сброс сейчас',
     used: (p) => `${p}% использовано`,
-    estimated: ' (оценка)',
+    estimatedMark: '~',
+    estimatedHint:
+      'Приблизительно: недельный расход на начало суток восстановлен по снимкам, а не измерен.',
     noLimitData: 'Нет данных о лимитах.',
     limitsError: '⚠ Не удалось загрузить лимиты',
 
@@ -627,8 +633,9 @@ function fmtChartDate(dateStr) {
 function ago(ms) {
   const s = Math.floor((Date.now() - ms) / 1000);
   if (s < 45) return t.justNow;
-  if (s < 3600) return t.agoSec(Math.floor(s / 60) === 0 ? s : Math.floor(s / 60));
-  return t.agoMin(Math.floor(s / 3600));
+  if (s < 60) return t.agoSec(s);
+  if (s < 3600) return t.agoMin(Math.floor(s / 60));
+  return t.agoHour(Math.floor(s / 3600));
 }
 
 /** Compact duration: 45s / 12m / 3h 10m / 2d 4h. @param {number} sec */
@@ -1618,7 +1625,11 @@ export function mount(container, api) {
       c.resetsAtMs = m.resetsAtMs;
       const valueText = m.valueText ? m.valueText : t.used(pctVal == null ? '—' : Math.round(pctVal));
       c.footLeft.textContent = m.resetsAtMs != null ? t.resetsAt(fmtResetsAt(m.resetsAtMs)) : '';
-      c.footRight.textContent = valueText + (m.estimated ? t.estimated : '');
+      // A derived number gets a quiet "~" rather than a "(est.)" tail: the
+      // caption's job is the two percentages, and the caveat lives in the
+      // tooltip where it does not compete with them for the line.
+      c.footRight.textContent = (m.estimated ? t.estimatedMark : '') + valueText;
+      c.footRight.title = m.estimated ? t.estimatedHint : '';
       c.footRight.className = sev.level === 'crit' ? 'cld-crit' : sev.level === 'warn' ? 'cld-warn' : '';
       c.countdown.textContent = fmtCountdown(m.resetsAtMs != null ? m.resetsAtMs - Date.now() : null);
     }

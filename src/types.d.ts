@@ -41,6 +41,10 @@ export interface DailyMeter extends Meter {
   todayUsed: number;
   /** Weekly-% budgeted for today. */
   todayBudget: number;
+  /** Weekly-% already spent when today's period opened (left half of the caption). */
+  dayStartPct: number;
+  /** Weekly-% today may reach by the period's end: (N+1) * 100/7. */
+  ceilingPct: number;
   /** todayUsed - todayBudget (>0 = over budget). */
   deltaPct: number;
 }

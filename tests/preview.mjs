@@ -41,7 +41,8 @@ const limits = {
     session: { label: 'Current session', usedPct: 42, resetsAtMs: now + 3 * 3600e3 + 12 * 60e3, kind: 'session' },
     daily: {
       label: "Today's budget", kind: 'daily', usedPct: 58, resetsAtMs: now + 9 * 3600e3,
-      estimated: false, valueText: '8/14%', todayUsed: 8, todayBudget: 14, deltaPct: -6,
+      estimated: false, valueText: '28% \u2192 42%', todayUsed: 8, todayBudget: 14, deltaPct: -6,
+      dayStartPct: 28.4, ceilingPct: 42.8,
     },
     weekly: [
       { label: 'All models', usedPct: 65, resetsAtMs: now + 3 * 86400e3, kind: 'weekly' },

@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 const PLUGIN = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const {
   computeDailyFrom, computeDaily, recordSnapshot, readHistory, writeHistory,
-  cyclePosition, emptyHistory,
+  cyclePosition, emptyHistory, pickBaseline,
 } = await import(path.join(PLUGIN, 'dist/daily.js'));
 
 const errs = [];
@@ -31,25 +31,32 @@ function scenario(openedAgoSec) {
 // ── 1. The reported bug: a new period with an empty history must read ~0%, ──
 //      not the cycle average the old spread-it-out fallback produced (~61%).
 {
-  const s = scenario(6 * 60);
+  const s = scenario(20 * 60);
   const history = emptyHistory();
   recordSnapshot(history, { periodStart: s.periodStart, pct: 42, nowSec: s.now });
   const d = computeDailyFrom({ wkCur: 42, wkResetMs: s.wkResetMs, nowMs: s.nowMs, history });
-  // Only the 6 unobserved minutes count against today: (360/86400) * (42/4).
-  near(d.todayUsed, 0.044, 0.02, 'fresh period: today ~0%, not the cycle average');
+  // Only the 20 unobserved minutes count against today: (1200/86400) * (42/4).
+  near(d.todayUsed, 0.146, 0.02, 'fresh period: today ~0%, not the cycle average');
   ok(d.usedPct < 2, `fresh period: bar under 2%, got ${d.usedPct.toFixed(1)}%`);
-  ok(d.estimated === true, 'past the 5-min grace, the number is flagged as an estimate');
-  ok(/^\d+\/\d+%$/.test(d.valueText), `valueText format, got ${d.valueText}`);
+  ok(d.estimated === true, 'past the grace, the number is flagged as an estimate');
+  ok(/^\d+% \u2192 \d+%$/.test(d.valueText), `valueText format, got ${d.valueText}`);
   ok(d.resetsAtMs === (s.periodStart + DAY) * S, 'resets at the end of the period');
 
   // A backend that was already running when the period rolled over snapshots
-  // within seconds, and that counts as measured.
+  // within seconds, and that counts as measured. So does one whose first
+  // post-boundary fetch was held back by the backend's 10-minute cache.
   const live = emptyHistory();
   const s2 = scenario(20);
   recordSnapshot(live, { periodStart: s2.periodStart, pct: 42, nowSec: s2.now });
   const d2 = computeDailyFrom({ wkCur: 42, wkResetMs: s2.wkResetMs, nowMs: s2.nowMs, history: live });
-  ok(d2.estimated === false, 'a snapshot within the 5-min grace is not an estimate');
+  ok(d2.estimated === false, 'a snapshot taken seconds in is not an estimate');
   ok(d2.todayUsed < 0.01, `rolled-over period starts at zero, got ${d2.todayUsed}`);
+
+  const cached = emptyHistory();
+  const s3 = scenario(9 * 60);
+  recordSnapshot(cached, { periodStart: s3.periodStart, pct: 42, nowSec: s3.now });
+  const d3 = computeDailyFrom({ wkCur: 42, wkResetMs: s3.wkResetMs, nowMs: s3.nowMs, history: cached });
+  ok(d3.estimated === false, 'a snapshot within one cache window is not an estimate');
 }
 
 // ── 2. Baseline carried over from the previous period ───────────────────
@@ -109,7 +116,11 @@ function scenario(openedAgoSec) {
   near(d.todayUsed, 14, 0.01, 'day 4: 61 - 47 spent today');
   near(d.todayBudget, 5 * (100 / 7) - 47, 0.01, 'day 4: ceiling 71.4 minus the 47 already spent');
   near(d.usedPct, 57.3, 0.2, 'day 4: bar just under 60% used');
-  ok(d.valueText === '14/24%', `day 4 valueText, got ${d.valueText}`);
+  // Day 4 (0-based day 4 -> the 5th period): the weekly counter stood at 47%
+  // when today opened, and may reach 5/7 = 71% before it closes.
+  near(d.dayStartPct, 47, 0.01, 'day 4: 47% already spent when today opened');
+  near(d.ceilingPct, 5 * (100 / 7), 0.01, 'day 4: ceiling is five sevenths');
+  ok(d.valueText === '47% \u2192 71%', `day 4 valueText, got ${d.valueText}`);
 }
 
 // ── 3. First period of a cycle: baseline is a known zero ────────────────
@@ -173,6 +184,29 @@ function scenario(openedAgoSec) {
   const d = computeDailyFrom({ wkCur: 33, wkResetMs: s.wkResetMs, nowMs: s.nowMs, history, legacy });
   near(d.todayUsed, 8, 0.01, 'statusline log sits on the boundary -> plain difference');
   ok(d.estimated === true, 'the statusline log has no timestamp, so it is approximate');
+}
+
+// ── 7b. …but our own record of that period outranks it ─────────────────
+//       Regression: on 2026-08-31 the log still held Sunday at 10% while our
+//       snapshot log had it at 21% half an hour before the boundary. The log's
+//       assumed distance of zero won the sort, and today's spend read 13%
+//       instead of ~1%.
+{
+  const s = scenario(3 * 3600);
+  const history = emptyHistory();
+  history.periods.push({
+    ps: s.periodStart - DAY, firstPct: 11, firstTs: s.periodStart - DAY + 3600,
+    lastPct: 21, lastTs: s.periodStart - 30 * 60,
+  });
+  recordSnapshot(history, { periodStart: s.periodStart, pct: 23, nowSec: s.now });
+  const legacy = [{ ps: s.periodStart - DAY, used_pct: 10 }];
+  const bl = pickBaseline(history, legacy, cyclePosition(s.wkResetMs, s.nowMs));
+  ok(bl.source !== 'statusline-log', `a timestamped snapshot of the same period wins, got ${bl.source}`);
+  const d = computeDailyFrom({ wkCur: 23, wkResetMs: s.wkResetMs, nowMs: s.nowMs, history, legacy });
+  ok(d.todayUsed < 4, `today reads the measured ~2%, not the log's 13%, got ${d.todayUsed.toFixed(2)}`);
+  // scenario() opens on day 3 of the cycle, so the ceiling is four sevenths.
+  ok(d.valueText.endsWith('% \u2192 57%'), `ceiling is four sevenths, got ${d.valueText}`);
+  ok(d.valueText.startsWith('21%'), `day-start reading is our 21%, not the log's 10%, got ${d.valueText}`);
 }
 
 // ── 8. recordSnapshot bookkeeping ───────────────────────────────────────

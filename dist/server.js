@@ -8,7 +8,7 @@
  * a claude.ai-style shape, caches it, and serves it to the frontend via RPC.
  *
  * The frontend calls:
- *   GET /limits          -> cached (<= CACHE_TTL_MS old) or fresh
+ *   GET /limits          -> cached (<= CACHE_TTL_MS old, 10 min) or fresh
  *   GET /limits?force=1  -> always fresh
  *
  * We never rotate the refresh token (that would break Claude Code's login).
@@ -34,12 +34,18 @@ const USAGE_ENDPOINT =
 const OAUTH_BETA = 'oauth-2025-04-20';
 
 /**
- * How long a live result is reused before we hit the API again. Kept well
- * below the frontend's shortest selectable refresh interval so a user-chosen
- * poll rate always gets fresh data; this only de-dupes bursts (e.g. several
- * tabs/renders asking at once).
+ * How long a live result is reused before we hit the API again. Deliberately
+ * longer than every selectable frontend poll interval: the usage numbers move
+ * slowly, so a dashboard left open all day should not hammer the endpoint once
+ * every 10-30 seconds. The Refresh button sends `force=1` and bypasses this,
+ * which is the way to get an immediate reading.
+ *
+ * Note this also paces the daily snapshot log (`recordSnapshot` only runs on a
+ * live fetch), so daily.js's GRACE_SEC must stay above this TTL — otherwise a
+ * period boundary that our first post-boundary fetch missed by a few minutes
+ * of cache would always be reported as an estimate.
  */
-const CACHE_TTL_MS = 5_000;
+const CACHE_TTL_MS = 10 * 60_000;
 
 /** Where Claude Code stores its OAuth credentials. */
 const CREDS_PATH =

@@ -45,9 +45,12 @@ const BASE = 100 / 7;
 
 /**
  * A snapshot older than this (relative to the period boundary) makes today's
- * number an estimate rather than a measurement.
+ * number an estimate rather than a measurement. Snapshots are only taken on a
+ * live (uncached) fetch, so this has to stay above the backend's CACHE_TTL_MS
+ * (10 min) — with a shorter grace every period boundary would land inside a
+ * cache window and be flagged as an estimate for no real reason.
  */
-const GRACE_SEC = 300;
+const GRACE_SEC = 11 * 60;
 
 /** Keep just over a cycle's worth of snapshots. */
 const RETAIN_DAYS = 9;
@@ -253,8 +256,19 @@ export function pickBaseline(history, legacy, pos) {
   // The statusline's log has no timestamps — its previous-period record is the
   // last value that period saw, so treat it as sitting on the boundary, but
   // flag it: it may have been written many hours earlier.
+  //
+  // Only when we have no record of that period ourselves. Both entries answer
+  // the same question ("where did yesterday end up"), but ours carries a real
+  // timestamp while the log's boundary position is an assumption — and an
+  // assumed distance of zero beats every timestamped candidate in the sort
+  // below. The log is written solely while an interactive TUI renders its
+  // prompt, so next to our own snapshots it is usually the staler of the two:
+  // on 2026-08-31 it still claimed 10% for a day our snapshot log had at 21%
+  // half an hour before the boundary, and today's spend came out 13% instead
+  // of 1%.
   const legacyPrev = legacy.find((e) => e.ps === periodStart - DAY);
-  if (legacyPrev) {
+  const ownPrev = history.periods.find((p) => p.ps === periodStart - DAY);
+  if (legacyPrev && !ownPrev) {
     candidates.push({ pct: legacyPrev.used_pct, ts: periodStart, approx: true, source: 'statusline-log' });
   }
 
@@ -324,16 +338,22 @@ export function computeDailyFrom({ wkCur, wkResetMs, nowMs, history, legacy = []
   let barPct = todayBudget > 0 ? (todayUsed * 100) / todayBudget : 100;
   if (barPct > 100) barPct = 100;
 
+  // The caption reads as a journey rather than a ratio: where the weekly
+  // counter stood when today's period opened, and the weekly % today is
+  // allowed to reach by the time it closes. On day N (0-based) of an untouched
+  // cycle that is `N/7 -> (N+1)/7`; spend less than a seventh and the right
+  // number stays put while the left one lags, which is exactly the headroom
+  // the carry-forward rule grants. Both are floored, never rounded, so neither
+  // number ever claims more than the arithmetic allows.
   return {
     label: "Today's budget",
     kind: 'daily',
     usedPct: barPct,
     resetsAtMs: (periodStart + DAY) * 1000,
     estimated,
-    // Matches the statusline's "$tu/$tb%" — without this the frontend falls
-    // back to plain "N% used" (the used/budget ratio), which reads as stuck
-    // at 0% whenever today's usage hasn't caught up to the rolling budget.
-    valueText: `${Math.trunc(todayUsed)}/${Math.trunc(todayBudget)}%`,
+    valueText: `${Math.floor(prevSpend)}% \u2192 ${Math.floor(ceilingToday)}%`,
+    dayStartPct: prevSpend,
+    ceilingPct: ceilingToday,
     todayUsed,
     todayBudget,
     deltaPct: todayUsed - todayBudget,
