@@ -46,9 +46,10 @@ const BASE = 100 / 7;
 /**
  * A snapshot older than this (relative to the period boundary) makes today's
  * number an estimate rather than a measurement. Snapshots are only taken on a
- * live (uncached) fetch, so this has to stay above the backend's CACHE_TTL_MS
- * (10 min) — with a shorter grace every period boundary would land inside a
- * cache window and be flagged as an estimate for no real reason.
+ * live (uncached) fetch, and the backend caches for an hour — but it lets one
+ * call per 24h period through precisely so the boundary gets observed, so what
+ * this has to cover is the frontend's poll interval (5 min at most), not the
+ * cache TTL.
  */
 const GRACE_SEC = 11 * 60;
 

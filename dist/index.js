@@ -66,7 +66,10 @@ const STRINGS = {
     interval: 'Refresh every',
     intervalOption: (ms) => (ms === 0 ? 'Off' : ms >= 60000 ? `${ms / 60000}m` : `${ms / 1000}s`),
     lastUpdated: (s) => `Updated ${s}`,
-    cached: ' · cached',
+    cachedAt: (hhmm) => `Cached at ${hhmm}`,
+    refreshFailed: '⚠ Refresh failed',
+    refreshFailedHint: (why) => `The live reading failed, so this is the cached one. ${why}`,
+    cachedStale: (hhmm, why) => `Cached at ${hhmm} — the live reading failed: ${why}`,
     justNow: 'just now',
     agoSec: (s) => `${s}s ago`,
     agoMin: (m) => `${m}m ago`,
@@ -194,7 +197,10 @@ const STRINGS = {
     interval: 'Обновлять каждые',
     intervalOption: (ms) => (ms === 0 ? 'Выкл' : ms >= 60000 ? `${ms / 60000} мин` : `${ms / 1000} с`),
     lastUpdated: (s) => `Обновлено ${s}`,
-    cached: ' · кэш',
+    cachedAt: (hhmm) => `Кеш от ${hhmm}`,
+    refreshFailed: '⚠ Обновление не проходит',
+    refreshFailedHint: (why) => `Свежее чтение получить не удалось, показано кешированное. ${why}`,
+    cachedStale: (hhmm, why) => `Кеш от ${hhmm} — свежий запрос не прошёл: ${why}`,
     justNow: 'сейчас',
     agoSec: (s) => `${s} с назад`,
     agoMin: (m) => `${m} мин назад`,
@@ -389,6 +395,18 @@ const CSS = `
 .cld-plan { font-size: 0.95rem; font-weight: 500; color: var(--muted); margin-left: 10px; }
 .cld-head-right { margin-left: auto; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .cld-stamp { font-size: 0.8rem; color: var(--muted); white-space: nowrap; }
+/* The cache marker is a footnote to the stamp, not a second headline. */
+.cld-stamp-cache { opacity: 0.65; font-size: 0.75rem; }
+/* A failed refresh is stated, not implied: the cards keep their numbers, and
+   this says why they stopped moving. */
+.cld-stale {
+  font-size: 0.75rem; color: var(--warning); white-space: nowrap;
+  border: 1px solid color-mix(in srgb, var(--warning) 45%, var(--border));
+  background: color-mix(in srgb, var(--warning) 10%, var(--card));
+  border-radius: 999px; padding: 1px 8px;
+}
+@keyframes cld-spin { to { transform: rotate(360deg); } }
+.cld-icon-btn.cld-busy svg { animation: cld-spin 0.8s linear infinite; }
 .cld-btn {
   display: inline-flex; align-items: center; justify-content: center;
   height: 30px; padding: 0 12px; border: 1px solid var(--border); border-radius: 8px;
@@ -630,6 +648,17 @@ function fmtChartDate(dateStr) {
   }
 }
 
+/** Wall-clock HH:MM in the viewer's locale. @param {number} ms */
+function fmtClock(ms) {
+  try {
+    // Same shape as the "Resets Tue 13:00" line beside it: 13:58 in ru,
+    // 1:58 PM in en, rather than a zero-padded hour nothing else uses.
+    return new Date(ms).toLocaleTimeString(t.locale, { hour: 'numeric', minute: '2-digit' });
+  } catch {
+    return '';
+  }
+}
+
 function ago(ms) {
   const s = Math.floor((Date.now() - ms) / 1000);
   if (s < 45) return t.justNow;
@@ -805,6 +834,9 @@ export function mount(container, api) {
   titleBox.append(title);
   const right = h('div', 'cld-head-right');
   const stamp = h('span', 'cld-stamp', '');
+  const cacheStamp = h('span', 'cld-stamp cld-stamp-cache', '');
+  const staleBadge = h('span', 'cld-stale', '');
+  staleBadge.style.display = 'none';
   const intervalLabel = h('label');
   Object.assign(intervalLabel.style, { display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.78rem', color: 'var(--muted)' });
   const intervalSpan = h('span');
@@ -818,7 +850,7 @@ export function mount(container, api) {
   const refreshBtn = h('button', 'cld-btn cld-icon-btn');
   refreshBtn.innerHTML =
     '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 4v5h-5"/></svg>';
-  right.append(stamp, intervalLabel, refreshBtn);
+  right.append(stamp, cacheStamp, staleBadge, intervalLabel, refreshBtn);
   const tabs = h('div', 'cld-tabs');
   const tabDashBtn = h('button', 'cld-tab');
   const tabUsageBtn = h('button', 'cld-tab');
@@ -1520,7 +1552,9 @@ export function mount(container, api) {
   tabUsageBtn.addEventListener('click', () => selectTab('usage'));
 
   // ── state
-  const state = { limits: null, history: null, sessions: [] };
+  // `lastGoodLimits` outlives a failed poll: `limits` is whatever the last
+  // call returned (error included), this is the newest one that carried data.
+  const state = { limits: null, lastGoodLimits: null, history: null, sessions: [] };
   let loading = true;
   /** @type {ReturnType<typeof setInterval>|null} */
   let dataTimer = null;
@@ -1578,17 +1612,40 @@ export function mount(container, api) {
   }
 
   // ── limits render
+
+  /**
+   * The reading to draw. A failed poll leaves `state.limits` holding an error;
+   * the last good response is kept alongside it so the dashboard keeps its
+   * numbers instead of collapsing into an error box. Only a failure with
+   * nothing behind it clears the cards.
+   */
+  function shownLimits() {
+    const lim = state.limits;
+    if (lim && lim.ok && lim.data) return lim;
+    return state.lastGoodLimits && state.lastGoodLimits.data ? state.lastGoodLimits : null;
+  }
+
+  /** Why the last attempt did not produce a fresh reading, if it didn't. */
+  function failureReason() {
+    const lim = state.limits;
+    if (!lim) return '';
+    if (lim.staleError) return lim.staleError;
+    if (!lim.ok) return lim.error || '';
+    return '';
+  }
+
   function limitKey(kind, label) {
     return `${kind}:${label}`;
   }
 
   function renderLimits() {
-    const r = state.limits;
-    if (!r) return;
-    if (!r.ok || !r.data) {
+    const r = shownLimits();
+    if (!r) {
+      const lim = state.limits;
+      if (!lim) return;
       limitsGrid.style.display = 'none';
       limitsErrBox.style.display = '';
-      limitsErrBox.textContent = `${t.limitsError}${r.error ? ` — ${r.error}` : ''}`;
+      limitsErrBox.textContent = `${t.limitsError}${lim.error ? ` — ${lim.error}` : ''}`;
       return;
     }
     limitsGrid.style.display = '';
@@ -1860,7 +1917,21 @@ export function mount(container, api) {
   // ── top-level render
   function render() {
     applyTheme();
-    stamp.textContent = loading && !state.limits ? '' : state.limits && state.limits.ok && state.limits.data ? t.lastUpdated(ago(state.limits.data.fetchedAt)) + (state.limits.source === 'cache' ? t.cached : '') : '';
+    const shown = shownLimits();
+    stamp.textContent = shown ? t.lastUpdated(ago(shown.data.fetchedAt)) : '';
+    // A failed attempt must be visible, not inferred from a number that quietly
+    // stopped moving — and it must not cost the reading we already have.
+    const why = failureReason();
+    staleBadge.textContent = why ? t.refreshFailed : '';
+    staleBadge.title = why ? t.refreshFailedHint(why) : '';
+    staleBadge.style.display = why && shown ? '' : 'none';
+    refreshBtn.classList.toggle('cld-busy', loading);
+    // Served from cache: say exactly how old it is, in wall-clock terms. "10
+    // minutes ago" is the same sentence whether the endpoint answered or is
+    // rate-limiting us; a clock time is checkable against what the user knows.
+    const fromCache = shown && shown.source === 'cache';
+    cacheStamp.textContent = fromCache ? t.cachedAt(fmtClock(shown.data.fetchedAt)) : '';
+    cacheStamp.title = fromCache && shown.staleError ? t.cachedStale(fmtClock(shown.data.fetchedAt), shown.staleError) : '';
     renderLimits();
     renderHistory();
     renderSessions();
@@ -1869,7 +1940,8 @@ export function mount(container, api) {
 
   // ── loading
   async function load(force) {
-    if (force) loading = true;
+    loading = true;
+    render();
     const current = resolveLang();
     if (current !== lang) {
       lang = current;
@@ -1882,6 +1954,7 @@ export function mount(container, api) {
       api.rpc('GET', 'sessions').catch((e) => ({ ok: false, error: errMsg(e) })),
     ]);
     state.limits = limitsR;
+    if (limitsR && limitsR.ok && limitsR.data) state.lastGoodLimits = limitsR;
     state.history = historyR;
     state.sessions = sessionsR && sessionsR.ok && Array.isArray(sessionsR.sessions) ? sessionsR.sessions : [];
     loading = false;
@@ -1939,7 +2012,10 @@ export function mount(container, api) {
   applyStaticText();
   selectTab('dashboard');
   render();
-  load(true);
+  // Not `load(true)`: opening the tab is not a reason to bypass the backend's
+  // cache. It used to force, which is why reopening the tab during a 429 blew
+  // the dashboard away instead of showing the reading it already had.
+  load(false);
   armDataTimer();
 
   tickTimer = setInterval(tickCountdowns, 1000);

@@ -136,12 +136,35 @@ that stretch: how far today's spend has travelled from the left number
 towards the right one. A leading `~` marks a day whose starting reading
 was reconstructed rather than measured; the tooltip says so.
 
-Cached 10 minutes — the numbers move slowly and a dashboard left open all
-day should not poll the endpoint every few seconds (the API rate-limits).
+Cached an hour — the numbers move slowly and a dashboard left open all day
+should not poll the endpoint every few seconds (the API rate-limits). Every
+live reading, forced or not, replaces the cache in memory and on disk. One
+exception keeps the daily meter honest: today's budget is measured against
+the weekly % at the start of the current 24h period, and that reading only
+happens on a live fetch, so a call is let through whenever a new period has
+opened since the last one — at most one extra request a day.
 The Refresh button sends `GET /limits?force=1`, which skips the cache; the
-header stamp shows the data's real age and appends `· cached` when it came
-from there. `daily.js`'s `GRACE_SEC` is kept above this TTL, since snapshots
-are only taken on a live fetch. It never rotates the refresh token.
+header stamp shows the data's real age, plus a quiet `Cached at 13:59` when
+the answer came from there (its tooltip names the upstream error, if any).
+`daily.js`'s `GRACE_SEC` is kept above this TTL, since snapshots are only
+taken on a live fetch. It never rotates the refresh token.
+
+The cache is what the dashboard falls back on whenever a live attempt fails:
+a 429 (or an expired token, or an unreachable endpoint) serves the last good
+reading with `source: 'cache'` and a `staleError`, instead of replacing every
+card with an error box — that only happens when there is nothing cached at
+all. Failures are followed by a one-minute backoff, since hammering a
+rate-limited endpoint is what keeps it rate-limited. The frontend holds the
+same line: it keeps the last response that carried data, so a failed poll (or
+a backend that is restarting) leaves the cards standing and raises a
+`⚠ Refresh failed` badge next to the stamp — with the upstream error in its
+tooltip — rather than swapping the dashboard for an error box. The badge
+clears itself on the first successful read, and the Refresh icon spins while
+an attempt is in flight, so a press that fails still looks like a press. The reading is also
+written to `~/.claude/cloudcli-claude-limits-cache.json` and read back at
+startup (`CLAUDE_LIMITS_CACHE` overrides the path), so a
+`systemctl restart cloudcli` doesn't leave the panel blank until the endpoint
+lets us back in.
 
 ### Token/cost history (`GET /history` and `GET /usage`)
 

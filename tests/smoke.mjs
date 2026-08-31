@@ -28,6 +28,8 @@ const tmp = path.join(os.tmpdir(), 'cl-fake-creds.json');
 // Keep the backend's snapshot log out of the real ~/.claude during tests.
 const histFile = path.join(os.tmpdir(), `cl-smoke-history-${process.pid}.json`);
 const noLegacy = path.join(os.tmpdir(), 'cl-smoke-no-statusline-log.json');
+const cacheFile = path.join(os.tmpdir(), `cl-smoke-cache-${process.pid}.json`);
+const noCache = path.join(os.tmpdir(), `cl-smoke-absent-cache-${process.pid}.json`);
 fs.writeFileSync(tmp, JSON.stringify({
   claudeAiOauth: { accessToken: 'test-token', subscriptionType: 'max_5x', scopes: ['user:profile'] },
 }));
@@ -67,13 +69,30 @@ const nowSec = Math.floor(Date.now() / 1000);
 const satIso = new Date((nowSec + 3 * 86400 - 60) * 1000).toISOString();
 const fableMs = Date.now() + 3 * 86400e3;
 
+// Flipped to 429 further down, to prove a rate-limited upstream does not
+// wipe out the reading the backend already has.
+let upstreamStatus = 200;
+
+// Overrides the weekly reset the mock reports (epoch seconds), so the test can
+// place a 24h period boundary a second or two into the future and walk the
+// backend across it for real, rather than mocking a clock.
+let weeklyResetOverride = null;
+
 const upstream = http.createServer((req, res) => {
   res.setHeader('content-type', 'application/json');
+  if (upstreamStatus !== 200) {
+    res.writeHead(upstreamStatus);
+    res.end(JSON.stringify({ error: { type: 'rate_limit_error', message: 'Rate limited. Please try again later.' } }));
+    return;
+  }
   res.end(JSON.stringify({
     plan: 'max_5x',
     rate_limits: {
       five_hour: { used_percentage: 1, resets_at: nowSec + 17700 },   // epoch seconds
-      seven_day: { used_percentage: 65, resets_at: satIso },          // ISO string
+      seven_day: {
+        used_percentage: 65,
+        resets_at: new Date((weeklyResetOverride ?? (nowSec + 3 * 86400 - 60)) * 1000).toISOString(),
+      },                                                              // ISO string
       seven_day_fable: { used_percentage: 0, resets_at: fableMs },    // epoch ms
     },
   }));
@@ -89,6 +108,7 @@ const child = spawn('node', [path.join(PLUGIN, 'dist/server.js')], {
     CLAUDE_LIMITS_ENDPOINT: `http://127.0.0.1:${upPort}/usage`,
     CLAUDE_LIMITS_HISTORY: histFile,
     CLAUDE_LIMITS_USAGE_LOG: noLegacy,
+    CLAUDE_LIMITS_CACHE: cacheFile,
   },
   stdio: ['ignore', 'pipe', 'pipe'],
 });
@@ -138,6 +158,106 @@ const r2 = await (await fetch(`http://127.0.0.1:${port}/limits`)).json();
 ok(r2.source === 'cache', `2nd call cached, got ${r2.source}`);
 const r3 = await (await fetch(`http://127.0.0.1:${port}/limits?force=1`)).json();
 ok(r3.source === 'live', `force call live, got ${r3.source}`);
+
+// ── /limits: an hour of cache, but never past a period boundary ────────
+// The weekly reset in the mock sits 3 days out with the current period opened
+// a minute ago; moving it back by a day makes "now" land in the next period,
+// which must let exactly one live call through even though the cache is fresh.
+{
+  const before = await (await fetch(`http://127.0.0.1:${port}/limits`)).json();
+  ok(before.source === 'cache', `a fresh reading stays cached, got ${before.source}`);
+
+  // Weekly reset placed 3 days + 1.5s out: 24h periods are anchored to it, so
+  // the current one closes 1.5 seconds from now.
+  weeklyResetOverride = Date.now() / 1000 + 3 * 86400 + 1.5;
+  await fetch(`http://127.0.0.1:${port}/limits?force=1`);   // anchor on this period
+  await new Promise((r) => setTimeout(r, 2200));            // …and let it close
+  const acrossBoundary = await (await fetch(`http://127.0.0.1:${port}/limits`)).json();
+  ok(acrossBoundary.source === 'live', `a new 24h period gets one live reading despite the hour-long cache, got ${acrossBoundary.source}`);
+  const after = await (await fetch(`http://127.0.0.1:${port}/limits`)).json();
+  ok(after.source === 'cache', `…and only one: the new period is covered now, got ${after.source}`);
+
+  weeklyResetOverride = null;
+  await fetch(`http://127.0.0.1:${port}/limits?force=1`);   // back to the original fixture
+}
+
+// ── /limits survives a rate-limited upstream ───────────────────────────
+// Reopening the tab during a 429 used to replace the whole dashboard with an
+// error box: the frontend forced a live call on mount and the backend had no
+// answer for a failed fetch other than the failure itself.
+upstreamStatus = 429;
+const r429 = await (await fetch(`http://127.0.0.1:${port}/limits?force=1`)).json();
+ok(r429.ok === true, `a 429 keeps serving the last reading, got ok=${r429.ok} error=${r429.error}`);
+ok(r429.source === 'cache', `429 answer comes from cache, got ${r429.source}`);
+ok(typeof r429.staleError === 'string', 'the papered-over error is reported for the tooltip');
+ok(r429.data?.weekly?.length > 0, 'the cached payload still carries its meters');
+const rBackoff = await (await fetch(`http://127.0.0.1:${port}/limits`)).json();
+ok(rBackoff.ok === true && rBackoff.source === 'cache', 'polls during the backoff stay on cache');
+upstreamStatus = 200;
+
+// With nothing cached, the error must still surface rather than be swallowed.
+{
+  const cold = spawn('node', [path.join(PLUGIN, 'dist/server.js')], {
+    env: {
+      PATH: process.env.PATH, HOME: tmpHome, NODE_ENV: 'production',
+      PLUGIN_NAME: 'cloudcli-claude-limits',
+      CLAUDE_LIMITS_CREDS: tmp,
+      CLAUDE_LIMITS_ENDPOINT: `http://127.0.0.1:${upPort}/usage`,
+      CLAUDE_LIMITS_HISTORY: histFile,
+      CLAUDE_LIMITS_USAGE_LOG: noLegacy,
+      CLAUDE_LIMITS_CACHE: noCache,
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  const coldPort = await new Promise((resolve, reject) => {
+    let buf = '';
+    const timer = setTimeout(() => reject(new Error('cold backend: no ready signal')), 5000);
+    cold.stdout.on('data', (d) => {
+      buf += d;
+      const line = buf.split('\n').find((l) => l.includes('"ready"'));
+      if (line) { clearTimeout(timer); resolve(JSON.parse(line).port); }
+    });
+  });
+  upstreamStatus = 429;
+  const rCold = await (await fetch(`http://127.0.0.1:${coldPort}/limits`)).json();
+  ok(rCold.ok === false && rCold.status === 429, `no cache to fall back on -> the error surfaces, got ok=${rCold.ok} status=${rCold.status}`);
+  upstreamStatus = 200;
+  cold.kill();
+}
+
+// A restart must not throw the last reading away: the backend writes it to
+// disk and reads it back at startup. This is the case that actually bit —
+// `systemctl restart cloudcli` followed by a rate-limited first fetch.
+ok(fs.existsSync(cacheFile), 'backend persisted its last reading');
+{
+  const restarted = spawn('node', [path.join(PLUGIN, 'dist/server.js')], {
+    env: {
+      PATH: process.env.PATH, HOME: tmpHome, NODE_ENV: 'production',
+      PLUGIN_NAME: 'cloudcli-claude-limits',
+      CLAUDE_LIMITS_CREDS: tmp,
+      CLAUDE_LIMITS_ENDPOINT: `http://127.0.0.1:${upPort}/usage`,
+      CLAUDE_LIMITS_HISTORY: histFile,
+      CLAUDE_LIMITS_USAGE_LOG: noLegacy,
+      CLAUDE_LIMITS_CACHE: cacheFile,
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  const rsPort = await new Promise((resolve, reject) => {
+    let buf = '';
+    const timer = setTimeout(() => reject(new Error('restarted backend: no ready signal')), 5000);
+    restarted.stdout.on('data', (d) => {
+      buf += d;
+      const line = buf.split('\n').find((l) => l.includes('"ready"'));
+      if (line) { clearTimeout(timer); resolve(JSON.parse(line).port); }
+    });
+  });
+  upstreamStatus = 429;
+  const rRestart = await (await fetch(`http://127.0.0.1:${rsPort}/limits`)).json();
+  ok(rRestart.ok === true && rRestart.source === 'cache', `a restarted backend serves the on-disk reading, got ok=${rRestart.ok} source=${rRestart.source}`);
+  ok(rRestart.data?.weekly?.length > 0, 'the restored reading carries its meters');
+  upstreamStatus = 200;
+  restarted.kill();
+}
 
 // ── /limits via the structured `raw.limits[]` shape ─────────────────────
 // Anthropic's live response (confirmed 2026-08-19) carries a self-describing
@@ -256,6 +376,8 @@ ok(!fs.existsSync(oldFile) && fs.existsSync(`${oldFile}.gz`), 'cleanup: old tran
 
 child.kill(); upstream.close(); fs.unlinkSync(tmp);
 try { fs.unlinkSync(histFile); } catch { /* never created */ }
+try { fs.unlinkSync(cacheFile); } catch { /* never created */ }
+try { fs.unlinkSync(noCache); } catch { /* never created */ }
 fs.rmSync(tmpHome, { recursive: true, force: true });
 if (errs.length) { console.error('FAILED:\n- ' + errs.join('\n- ')); process.exit(1); }
 console.log('smoke: ALL ASSERTIONS PASSED');

@@ -30,9 +30,12 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const now = Date.now();
 const DAY = 86_400_000;
 
+// Served from cache, 7 minutes old, standing in for a rate-limited upstream:
+// the shape a dashboard spends most of its life in now that a live reading is
+// reused for 10 minutes. It also puts the "Кеш от HH:MM" marker in the shots.
 const limits = {
   ok: true,
-  source: 'live',
+  source: 'cache',
   status: 200,
   endpoint: 'https://api.anthropic.com/api/oauth/usage',
   data: {
@@ -49,7 +52,7 @@ const limits = {
       { label: 'Opus', usedPct: 22, resetsAtMs: now + 3 * 86400e3, kind: 'weekly' },
       { label: 'Fable', usedPct: 91, resetsAtMs: now + 3 * 86400e3, kind: 'weekly' },
     ],
-    fetchedAt: now,
+    fetchedAt: now - 7 * 60e3,
   },
 };
 
@@ -190,6 +193,11 @@ const html = `<!doctype html>
     onContextChange: () => () => {},
     rpc: async (method, path) => {
       const [p, qs] = String(path).replace(/^\\//, '').split('?');
+      // window.__failLimits lets the test simulate a rate-limited backend
+      // without a second fixture: the tab must keep the reading it has.
+      if (p === 'limits' && window.__failLimits) {
+        return { ok: false, code: 'http_error', status: 429, source: 'live', error: 'Endpoint returned HTTP 429.' };
+      }
       if (p === 'limits') return FIXTURES.limits;
       if (p === 'sessions') return FIXTURES.sessions;
       if (p === 'history' || p === 'usage') {
@@ -309,6 +317,52 @@ for (const { theme, lang } of COMBOS) {
       return btn ? btn.textContent : null;
     });
     console.log(`  kill-confirm disarm on outside click: ${disarmed === 'Kill' ? 'OK' : `UNEXPECTED (${disarmed})`}`);
+
+    // A cached reading names the clock time it was taken at, and carries the
+    // papered-over upstream error in its tooltip.
+    const cacheMark = await page.evaluate(() => {
+      const el = document.querySelector('.cld-stamp-cache');
+      return el ? { text: el.textContent, title: el.title } : null;
+    });
+    const cacheOk = cacheMark && /^Cached at \d{1,2}:\d{2}/.test(cacheMark.text);
+    console.log(`  cache stamp: ${cacheOk ? `OK ("${cacheMark.text}")` : `UNEXPECTED (${JSON.stringify(cacheMark)})`}`);
+    if (!cacheOk) firstRunErrors.push('cache stamp');
+
+    // A failed refresh keeps every card and says so. The reported bug was the
+    // opposite: pressing Refresh during a 429 replaced the whole dashboard
+    // with an error box.
+    const failed = await page.evaluate(async () => {
+      window.__failLimits = true;
+      document.querySelector('.cld-icon-btn').click();
+      await new Promise((r) => setTimeout(r, 300));
+      const badge = document.querySelector('.cld-stale');
+      const grid = document.querySelector('.cld-limits-grid');
+      const err = document.querySelector('.cld-err');
+      return {
+        badge: badge && badge.style.display !== 'none' ? badge.textContent : null,
+        badgeTitle: badge ? badge.title : '',
+        cards: grid ? grid.children.length : 0,
+        gridHidden: grid ? grid.style.display === 'none' : true,
+        errShown: err ? err.style.display !== 'none' : false,
+        keptNumbers: document.body.textContent.includes('28% → 42%'),
+      };
+    });
+    const failOk =
+      failed.badge === '⚠ Refresh failed' && failed.cards === 5 && !failed.gridHidden &&
+      !failed.errShown && failed.keptNumbers && failed.badgeTitle.includes('429');
+    console.log(`  failed refresh keeps the cards: ${failOk ? `OK ("${failed.badge}", ${failed.cards} cards)` : `UNEXPECTED (${JSON.stringify(failed)})`}`);
+    if (!failOk) firstRunErrors.push('failed refresh');
+
+    // …and a recovering backend clears the warning.
+    const recovered = await page.evaluate(async () => {
+      window.__failLimits = false;
+      document.querySelector('.cld-icon-btn').click();
+      await new Promise((r) => setTimeout(r, 300));
+      const badge = document.querySelector('.cld-stale');
+      return badge ? badge.style.display === 'none' : false;
+    });
+    console.log(`  warning clears once it succeeds: ${recovered ? 'OK' : 'UNEXPECTED'}`);
+    if (!recovered) firstRunErrors.push('stale badge stuck');
   }
 
   const out = path.join(here, `preview-${theme}-${lang}.png`);

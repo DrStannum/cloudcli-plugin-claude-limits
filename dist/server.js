@@ -8,7 +8,7 @@
  * a claude.ai-style shape, caches it, and serves it to the frontend via RPC.
  *
  * The frontend calls:
- *   GET /limits          -> cached (<= CACHE_TTL_MS old, 10 min) or fresh
+ *   GET /limits          -> cached (<= CACHE_TTL_MS old, 1 hour) or fresh
  *   GET /limits?force=1  -> always fresh
  *
  * We never rotate the refresh token (that would break Claude Code's login).
@@ -19,7 +19,7 @@ import http from 'node:http';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { computeDaily } from './daily.js';
+import { computeDaily, cyclePosition } from './daily.js';
 import { aggregate, historyOptions, parseTranscriptLine, projectLabel } from './history.js';
 import { readClaudeSessions } from './sessions.js';
 import { getContext, killSession, resumeSession, cleanup } from './sessionActions.js';
@@ -35,17 +35,29 @@ const OAUTH_BETA = 'oauth-2025-04-20';
 
 /**
  * How long a live result is reused before we hit the API again. Deliberately
- * longer than every selectable frontend poll interval: the usage numbers move
- * slowly, so a dashboard left open all day should not hammer the endpoint once
- * every 10-30 seconds. The Refresh button sends `force=1` and bypasses this,
- * which is the way to get an immediate reading.
+ * far longer than every selectable frontend poll interval: the usage numbers
+ * move slowly, so a dashboard left open all day should not hammer the endpoint
+ * once every 10-30 seconds. The Refresh button sends `force=1` and bypasses
+ * this, which is the way to get an immediate reading — and every live reading,
+ * forced or not, replaces the cache (in memory and on disk).
  *
- * Note this also paces the daily snapshot log (`recordSnapshot` only runs on a
- * live fetch), so daily.js's GRACE_SEC must stay above this TTL — otherwise a
- * period boundary that our first post-boundary fetch missed by a few minutes
- * of cache would always be reported as an estimate.
+ * One exception keeps the daily meter honest: the snapshot log is only written
+ * on a live fetch, so an hour of cache would leave the start of each 24h period
+ * unobserved. `needsBoundaryReading()` below lets exactly one call through per
+ * period to anchor it — at most one extra request a day.
  */
-const CACHE_TTL_MS = 10 * 60_000;
+const CACHE_TTL_MS = 60 * 60_000;
+
+/**
+ * The last good reading, kept on disk so it survives a backend restart. A
+ * `systemctl restart cloudcli` used to drop the cache on the floor, and the
+ * first fetch afterwards would land on a rate-limited endpoint with nothing
+ * to fall back on — which is a blank dashboard at exactly the moment the
+ * plugin has the most to say.
+ */
+const CACHE_PATH =
+  process.env.CLAUDE_LIMITS_CACHE ||
+  path.join(os.homedir(), '.claude', 'cloudcli-claude-limits-cache.json');
 
 /** Where Claude Code stores its OAuth credentials. */
 const CREDS_PATH =
@@ -330,17 +342,116 @@ function prettyPlan(p, tierHint) {
 let cache = null;
 
 /**
+ * Restore the on-disk reading at startup. Never throws: a missing or corrupt
+ * file simply means the first call has to go live.
+ */
+function loadCacheFile() {
+  try {
+    const raw = JSON.parse(fs.readFileSync(CACHE_PATH, 'utf8'));
+    if (!raw || !raw.data || typeof raw.data.fetchedAt !== 'number') return;
+    cache = {
+      ok: true,
+      data: raw.data,
+      status: 200,
+      source: 'cache',
+      endpoint: USAGE_ENDPOINT,
+    };
+    // It was a live reading when it was written, so its period is covered.
+    snapshotPeriod = periodOf(raw.data);
+  } catch {
+    /* no cache to restore */
+  }
+}
+
+/** @param {import('../src/types').LimitsResponse} out */
+function saveCacheFile(out) {
+  const tmp = `${CACHE_PATH}.${process.pid}.tmp`;
+  try {
+    fs.writeFileSync(tmp, JSON.stringify({ v: 1, data: out.data }));
+    fs.renameSync(tmp, CACHE_PATH);
+  } catch {
+    try { fs.unlinkSync(tmp); } catch { /* nothing to clean up */ }
+  }
+}
+
+loadCacheFile();
+
+/** When the last live attempt failed, epoch ms. */
+let lastFailureAt = 0;
+
+/**
+ * Start (epoch seconds) of the 24h period whose opening reading we have
+ * already snapshotted, so we know when a new one has begun uncovered.
+ * @type {number|null}
+ */
+let snapshotPeriod = null;
+
+/**
+ * Which 24h period a reading belongs to. Periods are anchored to the weekly
+ * reset, so the weekly meter carries everything needed to place one.
+ * @param {import('../src/types').Limits} data
+ * @returns {number|null}
+ */
+function periodOf(data) {
+  const wk = (data.weekly || []).find((w) => w.label === 'All models') || (data.weekly || [])[0];
+  if (!wk || wk.resetsAtMs == null) return null;
+  return cyclePosition(wk.resetsAtMs, data.fetchedAt).periodStart;
+}
+
+/**
+ * True when a new 24h period has opened since our last live reading. Today's
+ * budget is measured as a difference against the weekly % at the period's
+ * start, so one reading has to land inside every period — otherwise an hour of
+ * cache would price the whole opening stretch at the cycle average and flag the
+ * day as an estimate.
+ */
+function needsBoundaryReading() {
+  if (!cache || !cache.ok || !cache.data) return false;
+  const wk = (cache.data.weekly || []).find((w) => w.label === 'All models') || (cache.data.weekly || [])[0];
+  if (!wk || wk.resetsAtMs == null) return false;
+  const nowPeriod = cyclePosition(wk.resetsAtMs, Date.now()).periodStart;
+  return snapshotPeriod == null || nowPeriod !== snapshotPeriod;
+}
+
+/**
+ * After a failed attempt, keep serving the last good reading rather than
+ * retrying on every poll. The endpoint answers `rate_limit_error` for a while
+ * once it has been tripped, and hammering it is what keeps it tripped.
+ */
+const RETRY_AFTER_ERROR_MS = 60_000;
+
+/**
+ * Serve the last good reading when a live attempt is impossible or failed.
+ * A stale number with an honest timestamp beats a blank dashboard: the whole
+ * card set — countdowns, bars, today's budget — is otherwise replaced by an
+ * error box, which is what a single 429 used to do.
+ *
+ * @param {import('../src/types').LimitsResponse} failure
+ * @returns {import('../src/types').LimitsResponse}
+ */
+function staleOr(failure) {
+  if (cache && cache.ok && cache.data) {
+    return { ...cache, source: 'cache', staleError: failure.error };
+  }
+  return failure;
+}
+
+/**
  * @param {boolean} force
  * @returns {Promise<import('../src/types').LimitsResponse>}
  */
 async function getLimits(force) {
-  if (!force && cache && cache.ok && cache.data && Date.now() - cache.data.fetchedAt < CACHE_TTL_MS) {
+  const fresh = !!(cache && cache.ok && cache.data && Date.now() - cache.data.fetchedAt < CACHE_TTL_MS);
+  if (!force && fresh && !needsBoundaryReading()) {
     return { ...cache, source: 'cache' };
+  }
+  if (!force && lastFailureAt && Date.now() - lastFailureAt < RETRY_AFTER_ERROR_MS && cache) {
+    return { ...cache, source: 'cache', staleError: cache.staleError };
   }
 
   const creds = readCredentials();
   if (!creds.accessToken) {
-    return fail('no_credentials', `No Claude OAuth token found at ${CREDS_PATH}. Sign in with a Claude Pro/Max subscription in Claude Code.`);
+    return staleOr(fail('no_credentials', `No Claude OAuth token found at ${CREDS_PATH}. Sign in with a Claude Pro/Max subscription in Claude Code.`));
   }
 
   let res;
@@ -356,7 +467,8 @@ async function getLimits(force) {
       },
     });
   } catch (err) {
-    return fail('network', `Could not reach ${USAGE_ENDPOINT}: ${errMsg(err)}`);
+    lastFailureAt = Date.now();
+    return staleOr(fail('network', `Could not reach ${USAGE_ENDPOINT}: ${errMsg(err)}`));
   }
 
   const bodyText = await res.text();
@@ -371,10 +483,13 @@ async function getLimits(force) {
   if (!res.ok) {
     const code = res.status === 401 || res.status === 403 ? 'unauthorized' : 'http_error';
     const hint =
-      code === 'unauthorized'
-        ? 'Token expired or missing the user:profile scope. Use Claude Code briefly (it refreshes the token), then Refresh.'
-        : `Endpoint returned HTTP ${res.status}. If this persists, the usage URL may have changed — see README.`;
-    return {
+      res.status === 429
+        ? 'The usage endpoint is rate-limiting this token. Showing the last reading until it lets us back in.'
+        : code === 'unauthorized'
+          ? 'Token expired or missing the user:profile scope. Use Claude Code briefly (it refreshes the token), then Refresh.'
+          : `Endpoint returned HTTP ${res.status}. If this persists, the usage URL may have changed — see README.`;
+    lastFailureAt = Date.now();
+    return staleOr({
       ok: false,
       code,
       status: res.status,
@@ -382,7 +497,7 @@ async function getLimits(force) {
       raw,
       source: 'live',
       endpoint: USAGE_ENDPOINT,
-    };
+    });
   }
 
   const data = normalize(raw, creds);
@@ -402,6 +517,9 @@ async function getLimits(force) {
     endpoint: USAGE_ENDPOINT,
   });
   cache = out;
+  lastFailureAt = 0;
+  snapshotPeriod = periodOf(data);
+  saveCacheFile(out);
   return out;
 }
 

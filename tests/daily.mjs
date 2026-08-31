@@ -44,7 +44,7 @@ function scenario(openedAgoSec) {
 
   // A backend that was already running when the period rolled over snapshots
   // within seconds, and that counts as measured. So does one whose first
-  // post-boundary fetch was held back by the backend's 10-minute cache.
+  // post-boundary reading waited out a poll interval.
   const live = emptyHistory();
   const s2 = scenario(20);
   recordSnapshot(live, { periodStart: s2.periodStart, pct: 42, nowSec: s2.now });
@@ -56,7 +56,7 @@ function scenario(openedAgoSec) {
   const s3 = scenario(9 * 60);
   recordSnapshot(cached, { periodStart: s3.periodStart, pct: 42, nowSec: s3.now });
   const d3 = computeDailyFrom({ wkCur: 42, wkResetMs: s3.wkResetMs, nowMs: s3.nowMs, history: cached });
-  ok(d3.estimated === false, 'a snapshot within one cache window is not an estimate');
+  ok(d3.estimated === false, 'a snapshot within one poll interval of the boundary is not an estimate');
 }
 
 // ── 2. Baseline carried over from the previous period ───────────────────

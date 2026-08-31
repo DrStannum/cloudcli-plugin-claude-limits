@@ -69,6 +69,11 @@ export interface LimitsResponse {
   raw?: unknown;
   /** Upstream HTTP status when the fetch reached the API. */
   status?: number;
+  /**
+   * Set when `data` is a cached reading served because the live attempt
+   * failed: the error we are papering over, for the stamp's tooltip.
+   */
+  staleError?: string;
   /** Machine-readable failure reason. */
   code?: 'no_credentials' | 'no_token' | 'unauthorized' | 'http_error' | 'network' | 'parse';
   error?: string;

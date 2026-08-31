@@ -1,7 +1,7 @@
 {
   "name": "cloudcli-claude-limits",
   "displayName": "Claude",
-  "version": "2.2.0",
+  "version": "2.2.1",
   "description": "A full-width Claude dashboard: plan usage limits with countdown timers, 30-day token/cost history, an active-session table with kill/resume/cleanup, and a Usage view that groups spend by day/week/month/session and drills into any project or model.",
   "author": "DrStannum",
   "license": "MIT",
