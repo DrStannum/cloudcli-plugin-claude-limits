@@ -166,6 +166,14 @@ startup (`CLAUDE_LIMITS_CACHE` overrides the path), so a
 `systemctl restart cloudcli` doesn't leave the panel blank until the endpoint
 lets us back in.
 
+The plan label ("Max (20x)") comes from `GET /api/oauth/profile`
+(`CLAUDE_LIMITS_PROFILE_ENDPOINT`), cached 24h and persisted with the reading.
+The usage payload carries no plan field, and `~/.claude/.credentials.json`
+keeps the tier it was written with at login — an account upgraded from Max 5x
+to 20x kept being labelled 5x until the next sign-in. The credentials file is
+still the fallback when the profile can't be reached. Only the derived label
+is stored; the rest of the profile (name, email, org) is read and dropped.
+
 ### Token/cost history (`GET /history` and `GET /usage`)
 
 Ported from the `cloudcli-plugin-claude-usage` plugin (TypeScript → plain

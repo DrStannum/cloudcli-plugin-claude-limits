@@ -30,6 +30,19 @@ import { getContext, killSession, resumeSession, cleanup } from './sessionAction
 const USAGE_ENDPOINT =
   process.env.CLAUDE_LIMITS_ENDPOINT || 'https://api.anthropic.com/api/oauth/usage';
 
+/**
+ * Endpoint that names the account's plan. The usage response carries no plan
+ * field at all, and `~/.claude/.credentials.json` keeps the tier it was
+ * written with — which goes stale the moment a subscription changes, so a
+ * Max 20x account kept being labelled "Max (5x)". Override with
+ * CLAUDE_LIMITS_PROFILE_ENDPOINT.
+ */
+const PROFILE_ENDPOINT =
+  process.env.CLAUDE_LIMITS_PROFILE_ENDPOINT || 'https://api.anthropic.com/api/oauth/profile';
+
+/** Plans change about as often as billing does; once a day is plenty. */
+const PROFILE_TTL_MS = 24 * 60 * 60_000;
+
 /** Beta header Claude Code sends for OAuth-scoped endpoints. */
 const OAUTH_BETA = 'oauth-2025-04-20';
 
@@ -217,9 +230,10 @@ function weeklyLabel(key) {
 /**
  * Map a raw usage response into the claude.ai-style shape.
  * @param {any} raw @param {{subscriptionType: string|null, rateLimitTier: string|null}} creds
+ * @param {string|null} [planHint] plan label from the account profile, which outranks both
  * @returns {import('../src/types').Limits}
  */
-function normalize(raw, creds) {
+function normalize(raw, creds, planHint) {
   // The statusline receives this under `rate_limits`; the HTTP response may put
   // the buckets at the top level. Support both.
   const root =
@@ -301,8 +315,11 @@ function normalize(raw, creds) {
     (raw && typeof raw === 'object' &&
       (raw.plan || raw.tier || raw.subscription || raw.subscription_type || raw.plan_type)) ||
     null;
+  // The account's own profile wins: it is the only source that is both live
+  // and authoritative. Then whatever the usage payload happened to carry, then
+  // the credentials file — right at login, stale ever after.
   const plan =
-    prettyPlan(rawPlan, creds.rateLimitTier) || prettyPlan(creds.subscriptionType, creds.rateLimitTier);
+    planHint || prettyPlan(rawPlan, creds.rateLimitTier) || prettyPlan(creds.subscriptionType, creds.rateLimitTier);
 
   // Host of the machine the plugin backend runs on — the TUI header shows it
   // as a shell-style `limits@<host>` prompt. The frontend can't read this
@@ -358,6 +375,9 @@ function loadCacheFile() {
     };
     // It was a live reading when it was written, so its period is covered.
     snapshotPeriod = periodOf(raw.data);
+    if (raw.profile && typeof raw.profile.plan === 'string' && typeof raw.profile.fetchedAt === 'number') {
+      profile = { plan: raw.profile.plan, fetchedAt: raw.profile.fetchedAt };
+    }
   } catch {
     /* no cache to restore */
   }
@@ -367,7 +387,7 @@ function loadCacheFile() {
 function saveCacheFile(out) {
   const tmp = `${CACHE_PATH}.${process.pid}.tmp`;
   try {
-    fs.writeFileSync(tmp, JSON.stringify({ v: 1, data: out.data }));
+    fs.writeFileSync(tmp, JSON.stringify({ v: 1, data: out.data, profile }));
     fs.renameSync(tmp, CACHE_PATH);
   } catch {
     try { fs.unlinkSync(tmp); } catch { /* nothing to clean up */ }
@@ -375,6 +395,69 @@ function saveCacheFile(out) {
 }
 
 loadCacheFile();
+
+/**
+ * The account's plan label, from PROFILE_ENDPOINT. Cached far longer than the
+ * usage numbers and persisted alongside them: it is one short string, and
+ * nothing else about the profile (name, email, org id) is kept.
+ * @type {{plan: string|null, fetchedAt: number}|null}
+ */
+let profile = null;
+
+/**
+ * Read the plan off the account profile. Returns null when it can't be had —
+ * every caller falls back to the credentials file, so a failure here costs a
+ * possibly-stale label, never the reading itself.
+ *
+ * @param {string} token
+ * @returns {Promise<string|null>}
+ */
+async function fetchPlan(token) {
+  let res;
+  try {
+    res = await fetch(PROFILE_ENDPOINT, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'anthropic-beta': OAUTH_BETA,
+        'anthropic-version': '2023-06-01',
+        'User-Agent': 'cloudcli-claude-limits/1.0',
+        Accept: 'application/json',
+      },
+    });
+  } catch {
+    return null;
+  }
+  if (!res.ok) return null;
+  let body;
+  try {
+    body = await res.json();
+  } catch {
+    return null;
+  }
+  const org = (body && body.organization) || {};
+  const acct = (body && body.account) || {};
+  // `organization_type` names the plan ("claude_max", "claude_pro"), and
+  // `rate_limit_tier` ("default_claude_max_20x") carries the multiplier. The
+  // has_claude_* booleans are the backstop for an account whose org type is
+  // missing or spelled some other way.
+  const kind =
+    org.organization_type ||
+    org.plan ||
+    (acct.has_claude_max ? 'max' : acct.has_claude_pro ? 'pro' : null);
+  return prettyPlan(kind, org.rate_limit_tier || null);
+}
+
+/**
+ * @param {string} token @param {boolean} force
+ * @returns {Promise<string|null>}
+ */
+async function getPlan(token, force) {
+  if (!force && profile && Date.now() - profile.fetchedAt < PROFILE_TTL_MS) return profile.plan;
+  const plan = await fetchPlan(token);
+  if (plan) profile = { plan, fetchedAt: Date.now() };
+  return profile ? profile.plan : null;
+}
 
 /** When the last live attempt failed, epoch ms. */
 let lastFailureAt = 0;
@@ -500,7 +583,7 @@ async function getLimits(force) {
     });
   }
 
-  const data = normalize(raw, creds);
+  const data = normalize(raw, creds, await getPlan(creds.accessToken, force));
   const allModels = data.weekly.find((w) => w.label === 'All models') || data.weekly[0] || null;
   data.daily = allModels
     ? computeDaily(allModels.usedPct, allModels.resetsAtMs, {

@@ -78,8 +78,21 @@ let upstreamStatus = 200;
 // backend across it for real, rather than mocking a clock.
 let weeklyResetOverride = null;
 
+// The account profile the backend reads the plan from. The credentials fixture
+// deliberately says "max_5x" (a stale login, the bug this covers) while the
+// live profile says 20x — the label must follow the profile.
+let profileStatus = 200;
+
 const upstream = http.createServer((req, res) => {
   res.setHeader('content-type', 'application/json');
+  if (req.url.startsWith('/profile')) {
+    res.writeHead(profileStatus);
+    res.end(JSON.stringify(profileStatus === 200 ? {
+      account: { has_claude_max: true, has_claude_pro: false },
+      organization: { organization_type: 'claude_max', rate_limit_tier: 'default_claude_max_20x' },
+    } : { type: 'error', error: { type: 'not_found_error' } }));
+    return;
+  }
   if (upstreamStatus !== 200) {
     res.writeHead(upstreamStatus);
     res.end(JSON.stringify({ error: { type: 'rate_limit_error', message: 'Rate limited. Please try again later.' } }));
@@ -106,6 +119,7 @@ const child = spawn('node', [path.join(PLUGIN, 'dist/server.js')], {
     PLUGIN_NAME: 'cloudcli-claude-limits',
     CLAUDE_LIMITS_CREDS: tmp,
     CLAUDE_LIMITS_ENDPOINT: `http://127.0.0.1:${upPort}/usage`,
+    CLAUDE_LIMITS_PROFILE_ENDPOINT: `http://127.0.0.1:${upPort}/profile`,
     CLAUDE_LIMITS_HISTORY: histFile,
     CLAUDE_LIMITS_USAGE_LOG: noLegacy,
     CLAUDE_LIMITS_CACHE: cacheFile,
@@ -130,7 +144,8 @@ const ok = (c, m) => { if (!c) errs.push(m); };
 // ── /limits (unchanged behavior) ──────────────────────────────────────
 const r = await (await fetch(`http://127.0.0.1:${port}/limits`)).json();
 ok(r.ok === true, 'ok true');
-ok(r.data?.plan === 'Max (5x)', `plan "Max (5x)", got ${r.data?.plan}`);
+// The credentials fixture says max_5x; the live profile says 20x and wins.
+ok(r.data?.plan === 'Max (20x)', `plan follows the account profile ("Max (20x)"), got ${r.data?.plan}`);
 ok(r.data?.session?.usedPct === 1, `session pct 1, got ${r.data?.session?.usedPct}`);
 ok(r.data?.session?.resetsAtMs > 1e12, 'session resetsAtMs from seconds');
 const all = r.data.weekly.find((w) => w.label === 'All models');
@@ -158,6 +173,40 @@ const r2 = await (await fetch(`http://127.0.0.1:${port}/limits`)).json();
 ok(r2.source === 'cache', `2nd call cached, got ${r2.source}`);
 const r3 = await (await fetch(`http://127.0.0.1:${port}/limits?force=1`)).json();
 ok(r3.source === 'live', `force call live, got ${r3.source}`);
+
+// ── plan label falls back to the credentials file ──────────────────────
+// An unreachable profile costs a possibly-stale label, never the reading.
+{
+  profileStatus = 404;
+  const noProfile = spawn('node', [path.join(PLUGIN, 'dist/server.js')], {
+    env: {
+      PATH: process.env.PATH, HOME: tmpHome, NODE_ENV: 'production',
+      PLUGIN_NAME: 'cloudcli-claude-limits',
+      CLAUDE_LIMITS_CREDS: tmp,
+      CLAUDE_LIMITS_ENDPOINT: `http://127.0.0.1:${upPort}/usage`,
+      CLAUDE_LIMITS_PROFILE_ENDPOINT: `http://127.0.0.1:${upPort}/profile`,
+      CLAUDE_LIMITS_HISTORY: histFile,
+      CLAUDE_LIMITS_USAGE_LOG: noLegacy,
+      CLAUDE_LIMITS_CACHE: noCache,
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  const npPort = await new Promise((resolve, reject) => {
+    let buf = '';
+    const timer = setTimeout(() => reject(new Error('no-profile backend: no ready signal')), 5000);
+    noProfile.stdout.on('data', (d) => {
+      buf += d;
+      const line = buf.split('\n').find((l) => l.includes('"ready"'));
+      if (line) { clearTimeout(timer); resolve(JSON.parse(line).port); }
+    });
+  });
+  const rNp = await (await fetch(`http://127.0.0.1:${npPort}/limits`)).json();
+  ok(rNp.ok === true, 'an unreachable profile still yields a reading');
+  ok(rNp.data?.plan === 'Max (5x)', `falls back to the credentials tier, got ${rNp.data?.plan}`);
+  noProfile.kill();
+  profileStatus = 200;
+  fs.rmSync(noCache, { force: true });
+}
 
 // ── /limits: an hour of cache, but never past a period boundary ────────
 // The weekly reset in the mock sits 3 days out with the current period opened
@@ -203,6 +252,7 @@ upstreamStatus = 200;
       PLUGIN_NAME: 'cloudcli-claude-limits',
       CLAUDE_LIMITS_CREDS: tmp,
       CLAUDE_LIMITS_ENDPOINT: `http://127.0.0.1:${upPort}/usage`,
+      CLAUDE_LIMITS_PROFILE_ENDPOINT: `http://127.0.0.1:${upPort}/profile`,
       CLAUDE_LIMITS_HISTORY: histFile,
       CLAUDE_LIMITS_USAGE_LOG: noLegacy,
       CLAUDE_LIMITS_CACHE: noCache,
@@ -236,6 +286,7 @@ ok(fs.existsSync(cacheFile), 'backend persisted its last reading');
       PLUGIN_NAME: 'cloudcli-claude-limits',
       CLAUDE_LIMITS_CREDS: tmp,
       CLAUDE_LIMITS_ENDPOINT: `http://127.0.0.1:${upPort}/usage`,
+      CLAUDE_LIMITS_PROFILE_ENDPOINT: `http://127.0.0.1:${upPort}/profile`,
       CLAUDE_LIMITS_HISTORY: histFile,
       CLAUDE_LIMITS_USAGE_LOG: noLegacy,
       CLAUDE_LIMITS_CACHE: cacheFile,
