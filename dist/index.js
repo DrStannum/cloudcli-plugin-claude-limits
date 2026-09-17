@@ -79,6 +79,10 @@ const STRINGS = {
     limitDaily: "Today's budget",
     limitAllModels: 'All models',
     remaining: (p) => (p == null ? 'remaining' : `remaining · ${p}%`),
+    hintCurSpent: "Current period's budget spent",
+    hintCurLeft: "Left of the current period's budget",
+    hintNextSpent: "Already borrowed from the next period's budget",
+    hintNextLeft: "Left of the next period's budget",
     resetsAt: (s) => `Resets ${s}`,
     resetsNow: 'Resets now',
     used: (p) => `${p}% used`,
@@ -210,6 +214,10 @@ const STRINGS = {
     limitDaily: 'Бюджет на сегодня',
     limitAllModels: 'Все модели',
     remaining: (p) => (p == null ? 'осталось' : `осталось · ${p}%`),
+    hintCurSpent: 'Потрачено из бюджета текущего дня',
+    hintCurLeft: 'Осталось от бюджета текущего дня',
+    hintNextSpent: 'Уже взято в счёт бюджета следующего дня',
+    hintNextLeft: 'Останется от бюджета следующего дня',
     resetsAt: (s) => `Сброс ${s}`,
     resetsNow: 'Сброс сейчас',
     used: (p) => `${p}% использовано`,
@@ -436,6 +444,12 @@ const CSS = `
 .cld-countdown-sub { font-size: 0.7rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); margin-bottom: 10px; }
 .cld-track { height: 8px; border-radius: 999px; overflow: hidden; margin: 6px 0 8px; background: color-mix(in srgb, var(--fill, var(--accent)) var(--track-mix), var(--card)); }
 .cld-fill { height: 100%; border-radius: 999px; background: var(--fill, var(--accent)); transition: width .45s cubic-bezier(.16,1,.3,1), background-color .3s ease; }
+.cld-split { display: flex; gap: 4px; margin: 6px 0 4px; }
+.cld-split > .cld-track { flex: 1 1 0; margin: 0; }
+.cld-legend { display: flex; gap: 4px; font-size: 0.76rem; color: var(--muted); margin-bottom: 8px; font-variant-numeric: tabular-nums; }
+.cld-legend > div { flex: 1 1 0; display: flex; justify-content: space-between; }
+.cld-legend span { cursor: help; }
+.cld-legend i { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 4px; vertical-align: 1px; background: var(--dot); }
 .cld-limit-foot { display: flex; justify-content: space-between; font-size: 0.76rem; color: var(--muted); }
 .cld-limit-foot .cld-warn { color: var(--warning); }
 .cld-limit-foot .cld-crit { color: var(--critical); }
@@ -777,12 +791,33 @@ function limitCard() {
   const countdown = h('div', 'cld-countdown', '--:--:--');
   const countdownSub = h('div', 'cld-countdown-sub');
   const mt = meter();
+  // Over-budget daily card: the single bar splits into today (spent) and
+  // the next period (how much of its allowance is already borrowed).
+  const split = h('div', 'cld-split');
+  const todayMeter = meter();
+  const nextMeter = meter();
+  split.append(todayMeter.track, nextMeter.track);
+  split.style.display = 'none';
+  const legend = h('div', 'cld-legend');
+  // One cell per bar, same flex split, so each pair of numbers sits right
+  // under its own bar: spent on the left, left over on the right.
+  const cell = () => {
+    const el = h('div');
+    const spent = h('span');
+    const left = h('span');
+    el.append(spent, left);
+    return { el, spent, left };
+  };
+  const legendToday = cell();
+  const legendNext = cell();
+  legend.append(legendToday.el, legendNext.el);
+  legend.style.display = 'none';
   const foot = h('div', 'cld-limit-foot');
   const footLeft = h('span');
   const footRight = h('span');
   foot.append(footLeft, footRight);
-  c.el.append(countdown, countdownSub, mt.track, foot);
-  return { ...c, countdown, countdownSub, meter: mt, footLeft, footRight };
+  c.el.append(countdown, countdownSub, mt.track, split, legend, foot);
+  return { ...c, countdown, countdownSub, meter: mt, split, todayMeter, nextMeter, legend, legendToday, legendNext, footLeft, footRight };
 }
 
 // ── Toast ──────────────────────────────────────────────────────────────
@@ -896,7 +931,7 @@ export function mount(container, api) {
   // Floating hover tooltip for chart bars — instant on hover, unlike the
   // browser's native `title` (which has a ~1s delay before it shows).
   const chartTip = h('div', 'cld-tip');
-  document.body.appendChild(chartTip);
+  root.appendChild(chartTip);
   function positionChartTip(ev, barEl) {
     const r = barEl.getBoundingClientRect();
     chartTip.style.left = `${ev.clientX}px`;
@@ -910,6 +945,17 @@ export function mount(container, api) {
   function hideChartTip() {
     chartTip.classList.remove('show');
   }
+  // The same instant tooltip for the daily card's split-bar numbers.
+  limitsGrid.addEventListener('mouseover', (ev) => {
+    const el = ev.target instanceof Element ? ev.target.closest('[data-tip]') : null;
+    if (!el) return hideChartTip();
+    chartTip.textContent = el.dataset.tip || '';
+    const r = el.getBoundingClientRect();
+    chartTip.style.left = `${r.left + r.width / 2}px`;
+    chartTip.style.top = `${r.top}px`;
+    chartTip.classList.add('show');
+  });
+  limitsGrid.addEventListener('mouseleave', hideChartTip);
 
   // ── Section 3: sessions
   const sessCard = h('div', 'cld-card');
@@ -1689,6 +1735,32 @@ export function mount(container, api) {
       c.footRight.title = m.estimated ? t.estimatedHint : '';
       c.footRight.className = sev.level === 'crit' ? 'cld-crit' : sev.level === 'warn' ? 'cld-warn' : '';
       c.countdown.textContent = fmtCountdown(m.resetsAtMs != null ? m.resetsAtMs - Date.now() : null);
+
+      // Daily overrun: spend past today's budget comes out of tomorrow's
+      // (carry-forward works both ways). No tomorrow on the cycle's last day —
+      // its ceiling is already 100% and the weekly reset follows.
+      const over = m.kind === 'daily' && m.deltaPct > 0.005 && m.ceilingPct < 99.5 ? m.deltaPct : 0;
+      const nextPct = (over * 100) / (100 / 7);
+      c.meter.track.style.display = over ? 'none' : '';
+      c.split.style.display = over ? '' : 'none';
+      c.legend.style.display = over ? '' : 'none';
+      if (over) {
+        const nextShown = Math.max(1, Math.round(nextPct));
+        const nextColor = nextPct >= 100 ? 'var(--critical)' : 'var(--warning)';
+        c.todayMeter.set(100, 'var(--critical)');
+        c.nextMeter.set(nextPct, nextColor);
+        const dot = (color, text) => `<i style="--dot: ${color}"></i>${text}`;
+        c.legendToday.spent.innerHTML = dot('var(--critical)', '100%');
+        c.legendToday.spent.dataset.tip = t.hintCurSpent;
+        c.legendToday.left.textContent = '0%';
+        c.legendToday.left.dataset.tip = t.hintCurLeft;
+        c.legendNext.spent.innerHTML = dot(nextColor, `${nextShown}%`);
+        c.legendNext.spent.dataset.tip = t.hintNextSpent;
+        c.legendNext.left.textContent = `${Math.max(0, 100 - nextShown)}%`;
+        c.legendNext.left.dataset.tip = t.hintNextLeft;
+        // Extend the band with the next period's ceiling: 61% → 71% → 85%.
+        c.footRight.textContent += ` \u2192 ${Math.floor(m.ceilingPct + 100 / 7)}%`;
+      }
     }
     for (const [key, c] of limitEls) {
       if (!seen.has(key)) {
