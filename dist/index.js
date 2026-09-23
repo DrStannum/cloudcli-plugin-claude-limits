@@ -83,6 +83,11 @@ const STRINGS = {
     hintCurLeft: "Left of the current period's budget",
     hintNextSpent: "Already borrowed from the next period's budget",
     hintNextLeft: "Left of the next period's budget",
+    hintDaySpent: "Spent of today's own 1/7 share — spent only after the carry",
+    hintDayLeft: "Left of today's own 1/7 share",
+    carryDays: (n) => `+${n}d`,
+    hintCarry: (n) => `Green — what ${n} earlier day${n === 1 ? '' : 's'} left unspent`,
+    hintCarryLeft: 'Still available from the carried-over days',
     resetsAt: (s) => `Resets ${s}`,
     resetsNow: 'Resets now',
     used: (p) => `${p}% used`,
@@ -218,6 +223,11 @@ const STRINGS = {
     hintCurLeft: 'Осталось от бюджета текущего дня',
     hintNextSpent: 'Уже взято в счёт бюджета следующего дня',
     hintNextLeft: 'Останется от бюджета следующего дня',
+    hintDaySpent: 'Потрачено из нормы сегодня (1/7) — она идёт в ход после переноса',
+    hintDayLeft: 'Осталось от нормы сегодня (1/7)',
+    carryDays: (n) => `+${n} дн.`,
+    hintCarry: (n) => `Зелёным — не потрачено за предыдущие дни: ${n} дн.`,
+    hintCarryLeft: 'Ещё доступно из перенесённого',
     resetsAt: (s) => `Сброс ${s}`,
     resetsNow: 'Сброс сейчас',
     used: (p) => `${p}% использовано`,
@@ -444,10 +454,18 @@ const CSS = `
 .cld-countdown-sub { font-size: 0.7rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); margin-bottom: 10px; }
 .cld-track { height: 8px; border-radius: 999px; overflow: hidden; margin: 6px 0 8px; background: color-mix(in srgb, var(--fill, var(--accent)) var(--track-mix), var(--card)); }
 .cld-fill { height: 100%; border-radius: 999px; background: var(--fill, var(--accent)); transition: width .45s cubic-bezier(.16,1,.3,1), background-color .3s ease; }
-.cld-split { display: flex; gap: 4px; margin: 6px 0 4px; }
-.cld-split > .cld-track { flex: 1 1 0; margin: 0; }
-.cld-legend { display: flex; gap: 4px; font-size: 0.76rem; color: var(--muted); margin-bottom: 8px; font-variant-numeric: tabular-nums; }
-.cld-legend > div { flex: 1 1 0; display: flex; justify-content: space-between; }
+.cld-split { --split-gap: 4px; display: flex; gap: var(--split-gap); margin: 6px 0 4px; }
+.cld-split > .cld-track { position: relative; flex: 1 1 0; margin: 0; }
+.cld-split > .cld-track[data-tip] { cursor: help; }
+/* A division carries two layers: the allowance still standing (green, from a
+   day that went unspent) and the spend on top of it, so one bar shows both
+   what is there and how far it has been eaten into. */
+.cld-split > .cld-track > .cld-fill { position: absolute; left: 0; top: 0; }
+/* Same --split-gap and the flex-basis the cells carry inline let a legend cell
+   spanning several bars end exactly where its last bar ends. */
+.cld-legend { --split-gap: 4px; display: flex; gap: var(--split-gap); font-size: 0.76rem; color: var(--muted); margin-bottom: 8px; font-variant-numeric: tabular-nums; }
+.cld-legend > div { flex: 1 1 0; display: flex; justify-content: space-between; gap: 6px; min-width: 0; }
+.cld-legend > div > span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .cld-legend span { cursor: help; }
 .cld-legend i { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 4px; vertical-align: 1px; background: var(--dot); }
 .cld-limit-foot { display: flex; justify-content: space-between; font-size: 0.76rem; color: var(--muted); }
@@ -791,33 +809,86 @@ function limitCard() {
   const countdown = h('div', 'cld-countdown', '--:--:--');
   const countdownSub = h('div', 'cld-countdown-sub');
   const mt = meter();
-  // Over-budget daily card: the single bar splits into today (spent) and
-  // the next period (how much of its allowance is already borrowed).
+  // The daily card can break its single bar into one division per 24h period
+  // its budget draws on: over budget, the day today already borrows from
+  // follows it; under budget, every earlier day whose allowance carried
+  // forward precedes it. Bars and legend cells are pooled and only re-attached
+  // when their count changes, so the widths keep animating between renders.
   const split = h('div', 'cld-split');
-  const todayMeter = meter();
-  const nextMeter = meter();
-  split.append(todayMeter.track, nextMeter.track);
-  split.style.display = 'none';
   const legend = h('div', 'cld-legend');
-  // One cell per bar, same flex split, so each pair of numbers sits right
-  // under its own bar: spent on the left, left over on the right.
-  const cell = () => {
-    const el = h('div');
-    const spent = h('span');
-    const left = h('span');
-    el.append(spent, left);
-    return { el, spent, left };
-  };
-  const legendToday = cell();
-  const legendNext = cell();
-  legend.append(legendToday.el, legendNext.el);
+  split.style.display = 'none';
   legend.style.display = 'none';
+  /** Division bar: the standing allowance underneath, the spend over it. */
+  const bar = () => {
+    const track = h('div', 'cld-track');
+    const avail = h('div', 'cld-fill');
+    const spend = h('div', 'cld-fill');
+    avail.style.width = '0%';
+    spend.style.width = '0%';
+    track.append(avail, spend);
+    return {
+      track,
+      set(availPct, availColor, spendPct, spendColor) {
+        // The empty part of the track is a wash of the spend color, as on the
+        // undivided bars.
+        track.style.setProperty('--fill', spendColor);
+        avail.style.setProperty('--fill', availColor);
+        avail.style.width = `${Math.max(0, Math.min(100, availPct))}%`;
+        spend.style.setProperty('--fill', spendColor);
+        spend.style.width = `${Math.max(0, Math.min(100, spendPct))}%`;
+      },
+    };
+  };
+  /** @type {ReturnType<typeof bar>[]} */
+  const bars = [];
+  /** @type {{el:HTMLElement, lead:HTMLElement, trail:HTMLElement}[]} */
+  const cells = [];
+  /**
+   * @param {{avail:number, availColor:string, spend:number, color:string, tip:string}[]} segs
+   *        one per bar, left to right
+   * @param {{span:number, dot:string, lead:string, leadTip:string, trail:string, trailTip:string}[]} legendSpec
+   *        one per group of bars; `span` is how many bars the cell sits under.
+   */
+  function setSplit(segs, legendSpec) {
+    while (bars.length < segs.length) bars.push(bar());
+    while (cells.length < legendSpec.length) {
+      const el = h('div');
+      const lead = h('span');
+      const trail = h('span');
+      el.append(lead, trail);
+      cells.push({ el, lead, trail });
+    }
+    if (split.childElementCount !== segs.length) {
+      split.replaceChildren(...bars.slice(0, segs.length).map((b) => b.track));
+    }
+    if (legend.childElementCount !== legendSpec.length) {
+      legend.replaceChildren(...cells.slice(0, legendSpec.length).map((c2) => c2.el));
+    }
+    segs.forEach((seg, i) => {
+      bars[i].set(seg.avail, seg.availColor, seg.spend, seg.color);
+      bars[i].track.dataset.tip = seg.tip;
+    });
+    legendSpec.forEach((spec, i) => {
+      const c2 = cells[i];
+      c2.el.style.flexGrow = String(spec.span);
+      // The bar-to-bar gaps a multi-bar cell swallows, so it lines up exactly.
+      c2.el.style.flexBasis = `calc(${spec.span - 1} * var(--split-gap))`;
+      // No dot where the cell is too narrow for one — the bar right above it
+      // carries the same color anyway.
+      c2.lead.innerHTML = spec.dot ? `<i style="--dot: ${spec.dot}"></i>${spec.lead}` : spec.lead;
+      c2.lead.dataset.tip = spec.leadTip;
+      c2.trail.textContent = spec.trail;
+      // An empty cell half must not keep a tooltip trigger of its own.
+      if (spec.trailTip) c2.trail.dataset.tip = spec.trailTip;
+      else delete c2.trail.dataset.tip;
+    });
+  }
   const foot = h('div', 'cld-limit-foot');
   const footLeft = h('span');
   const footRight = h('span');
   foot.append(footLeft, footRight);
   c.el.append(countdown, countdownSub, mt.track, split, legend, foot);
-  return { ...c, countdown, countdownSub, meter: mt, split, todayMeter, nextMeter, legend, legendToday, legendNext, footLeft, footRight };
+  return { ...c, countdown, countdownSub, meter: mt, split, legend, setSplit, footLeft, footRight };
 }
 
 // ── Toast ──────────────────────────────────────────────────────────────
@@ -1736,30 +1807,93 @@ export function mount(container, api) {
       c.footRight.className = sev.level === 'crit' ? 'cld-crit' : sev.level === 'warn' ? 'cld-warn' : '';
       c.countdown.textContent = fmtCountdown(m.resetsAtMs != null ? m.resetsAtMs - Date.now() : null);
 
-      // Daily overrun: spend past today's budget comes out of tomorrow's
-      // (carry-forward works both ways). No tomorrow on the cycle's last day —
-      // its ceiling is already 100% and the weekly reset follows.
-      const over = m.kind === 'daily' && m.deltaPct > 0.005 && m.ceilingPct < 99.5 ? m.deltaPct : 0;
-      const nextPct = (over * 100) / (100 / 7);
-      c.meter.track.style.display = over ? 'none' : '';
-      c.split.style.display = over ? '' : 'none';
-      c.legend.style.display = over ? '' : 'none';
-      if (over) {
-        const nextShown = Math.max(1, Math.round(nextPct));
-        const nextColor = nextPct >= 100 ? 'var(--critical)' : 'var(--warning)';
-        c.todayMeter.set(100, 'var(--critical)');
-        c.nextMeter.set(nextPct, nextColor);
-        const dot = (color, text) => `<i style="--dot: ${color}"></i>${text}`;
-        c.legendToday.spent.innerHTML = dot('var(--critical)', '100%');
-        c.legendToday.spent.dataset.tip = t.hintCurSpent;
-        c.legendToday.left.textContent = '0%';
-        c.legendToday.left.dataset.tip = t.hintCurLeft;
-        c.legendNext.spent.innerHTML = dot(nextColor, `${nextShown}%`);
-        c.legendNext.spent.dataset.tip = t.hintNextSpent;
-        c.legendNext.left.textContent = `${Math.max(0, 100 - nextShown)}%`;
-        c.legendNext.left.dataset.tip = t.hintNextLeft;
-        // Extend the band with the next period's ceiling: 61% → 71% → 85%.
-        c.footRight.textContent += ` \u2192 ${Math.floor(m.ceilingPct + 100 / 7)}%`;
+      // The daily budget is a day's share (1/7 of the week) plus whatever the
+      // earlier days left unspent, and carry-forward works both ways: past
+      // that budget the spend comes out of tomorrow's share. Either way the
+      // card stops being about a single period, so the bar splits into one
+      // division per period involved — oldest first, so it still fills left to
+      // right: the days carried in, then today's own share, then tomorrow's.
+      const BASE = 100 / 7;
+      const daily = m.kind === 'daily' && m.todayBudget != null && m.todayUsed != null;
+      // No tomorrow on the cycle's last day — its ceiling is already 100% and
+      // the weekly reset follows.
+      const over = daily && m.deltaPct > 0.005 && m.ceilingPct < 99.5 ? m.deltaPct : 0;
+      // Allowance carried in from days that weren't spent out, as whole days
+      // rounded up: a day left 30% unspent is still a day that went unspent,
+      // so it gets its own division — just a partly filled one.
+      const carry = daily ? m.todayBudget - BASE : 0;
+      const carryDays = carry > 0.5 ? Math.ceil(carry / BASE - 0.01) : 0;
+      const split = over > 0 || carryDays > 0;
+      c.meter.track.style.display = split ? 'none' : '';
+      c.split.style.display = split ? '' : 'none';
+      c.legend.style.display = split ? '' : 'none';
+      if (split) {
+        /** @type {{avail:number, availColor:string, spend:number, color:string, tip:string}[]} */
+        const segs = [];
+        /** @type {{span:number, dot:string, lead:string, leadTip:string, trail:string, trailTip:string}[]} */
+        const legendSpec = [];
+        // Spend is charged to the oldest allowance first, so today's own share
+        // stays untouched for as long as a carried day is still standing.
+        let rest = m.todayUsed;
+        if (carryDays) {
+          for (let i = 0; i < carryDays; i++) {
+            // Whole days first; the leftover fraction is the division next to
+            // today, the last of the reserve to go.
+            const cap = Math.min(BASE, carry - i * BASE);
+            const spent = Math.min(rest, cap);
+            rest -= spent;
+            segs.push({
+              avail: (cap * 100) / BASE,
+              availColor: 'var(--ok)',
+              spend: (spent * 100) / BASE,
+              color: sev.color,
+              tip: t.hintCarry(carryDays),
+            });
+          }
+          legendSpec.push({
+            span: carryDays, dot: 'var(--ok)',
+            lead: t.carryDays(carryDays), leadTip: t.hintCarry(carryDays),
+            trail: `+${Math.round(Math.max(0, carry - Math.min(m.todayUsed, carry)))}%`,
+            trailTip: t.hintCarryLeft,
+          });
+        }
+        // With days carried in, today's division is its own 1/7 share; without
+        // them it is the whole budget (which the earlier days may have shrunk).
+        const own = carryDays ? BASE : m.todayBudget;
+        const ownPct = own > 0 ? Math.min(100, (Math.max(0, rest) * 100) / own) : 100;
+        const ownShown = Math.round(ownPct);
+        segs.push({
+          avail: 0, availColor: 'var(--ok)', spend: ownPct, color: sev.color,
+          tip: carryDays ? t.hintDaySpent : t.hintCurSpent,
+        });
+        legendSpec.push({
+          span: 1, dot: sev.color,
+          lead: `${ownShown}%`, leadTip: carryDays ? t.hintDaySpent : t.hintCurSpent,
+          trail: `${Math.max(0, 100 - ownShown)}%`, trailTip: carryDays ? t.hintDayLeft : t.hintCurLeft,
+        });
+        if (over) {
+          const nextPct = (over * 100) / BASE;
+          const nextShown = Math.max(1, Math.round(nextPct));
+          const nextColor = nextPct >= 100 ? 'var(--critical)' : 'var(--warning)';
+          segs.push({ avail: 0, availColor: 'var(--ok)', spend: nextPct, color: nextColor, tip: t.hintNextSpent });
+          legendSpec.push({
+            span: 1, dot: nextColor,
+            lead: `${nextShown}%`, leadTip: t.hintNextSpent,
+            trail: `${Math.max(0, 100 - nextShown)}%`, trailTip: t.hintNextLeft,
+          });
+          // Extend the band with the next period's ceiling: 61% -> 71% -> 85%.
+          c.footRight.textContent += ` \u2192 ${Math.floor(m.ceilingPct + BASE)}%`;
+        }
+        // A cell only fits a pair of numbers when it is about two bars wide,
+        // and a whole week of divisions leaves no room for the dot either --
+        // so the narrow cells shed the second number, then the dot, instead of
+        // ellipsising what they have.
+        for (const spec of legendSpec) {
+          if (spec.span >= 2) continue;
+          if (segs.length > 2) { spec.trail = ''; spec.trailTip = ''; }
+          if (segs.length > 4) spec.dot = '';
+        }
+        c.setSplit(segs, legendSpec);
       }
     }
     for (const [key, c] of limitEls) {

@@ -136,6 +136,25 @@ that stretch: how far today's spend has travelled from the left number
 towards the right one. A leading `~` marks a day whose starting reading
 was reconstructed rather than measured; the tooltip says so.
 
+Because unspent allowance carries forward, today's budget is often not one
+plain day — and then the bar breaks into one division per 24h period it
+covers, each with an instant-hover tooltip:
+
+* **Days carried in.** Every earlier day that wasn't spent out adds a green
+  division *before* today's own share — oldest first, so the row still fills
+  left to right. Green is the allowance still standing; today's spend covers
+  it from the left, oldest money first, and today's own 1/7 share is the
+  last division, still empty for as long as a carried day is left (a day
+  left 60% unspent is still an unspent day, so it gets its own division,
+  green over 60% of its width). The legend reads e.g. `+2d` · `+17%` ·
+  `0%`: two days carried in, 17 weekly points of them still standing, and
+  today's own share untouched.
+* **Tomorrow borrowed against.** Past the whole budget the overrun comes out
+  of tomorrow's share, which joins the row as a last division showing how
+  much of it is already gone, and the caption band gains the next period's
+  ceiling (`61% → 71% → 85%`). No such division on the cycle's last day —
+  its ceiling is already 100% and the weekly reset follows.
+
 Cached an hour — the numbers move slowly and a dashboard left open all day
 should not poll the endpoint every few seconds (the API rate-limits). Every
 live reading, forced or not, replaces the cache in memory and on disk. One
@@ -308,7 +327,8 @@ preview.html            # generated static preview of the dashboard
 tests/daily.mjs         # unit tests for dist/daily.js
 tests/history.mjs       # unit tests for dist/history.js (ranges, week/month/session grouping, filters)
 tests/smoke.mjs         # backend integration test (mock upstream + isolated fake $HOME)
-tests/preview.mjs       # regenerates preview.html + Playwright screenshots (light/dark × en/ru, + Usage)
+tests/preview.mjs       # regenerates preview.html + Playwright screenshots (light/dark × en/ru,
+                        #   + Usage, + the daily card's carry/overrun splits via ?daily=)
 icon.svg
 ```
 

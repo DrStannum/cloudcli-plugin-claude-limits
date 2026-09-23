@@ -153,7 +153,34 @@ const sessions = [
   },
 ];
 
-const FIXTURES = { limits, sessions: { ok: true, sessions }, transcripts: SESSIONS };
+// The daily card has three shapes and only one of them can be in the main
+// screenshots: the plain single bar above, plus the two the carry-forward rule
+// produces. `?daily=carry|over` swaps those in so they can be looked at too.
+const dailyVariants = {
+  // Day 4 of the cycle (0-based 3, ceiling 4/7 = 57%) with only 20% spent so
+  // far: 1.6 days' allowance carried in, so the bar gets two green divisions
+  // (a whole day and a 60% one) next to today's own share, 40% of which is
+  // gone.
+  carry: {
+    ...limits.data.daily, usedPct: 15.3, valueText: '20% \u2192 57%',
+    todayUsed: 5.71, todayBudget: 37.14, deltaPct: -31.43, dayStartPct: 20, ceilingPct: 57.14,
+  },
+  // The widest the split can get: last day of a cycle nothing was spent in,
+  // so six untouched days carry in beside today's own share. Worth a look
+  // because it is where the legend runs out of room.
+  carryMax: {
+    ...limits.data.daily, usedPct: 0.6, valueText: '0% \u2192 100%',
+    todayUsed: 0.6, todayBudget: 100, deltaPct: -99.4, dayStartPct: 0, ceilingPct: 100,
+  },
+  // Day 5 (ceiling 5/7 = 71%) after a heavy start: today's budget is 10.4% and
+  // 15% is already gone, a third of tomorrow's share borrowed in advance.
+  over: {
+    ...limits.data.daily, usedPct: 100, valueText: '61% \u2192 71%',
+    todayUsed: 15, todayBudget: 10.43, deltaPct: 4.57, dayStartPct: 61, ceilingPct: 71.43,
+  },
+};
+
+const FIXTURES = { limits, dailyVariants, sessions: { ok: true, sessions }, transcripts: SESSIONS };
 
 // ── preview.html ───────────────────────────────────────────────────────
 
@@ -187,6 +214,11 @@ const html = `<!doctype html>
   // takes when the setting was never touched.
   if (q.get('lang') === 'ru') localStorage.setItem('userLanguage', 'ru');
   else localStorage.removeItem('userLanguage');
+
+  // ?daily=carry|over — the same reading, in the two states the carry-forward
+  // rule can put today's budget in.
+  const daily = FIXTURES.dailyVariants[q.get('daily')];
+  if (daily) FIXTURES.limits.data.daily = daily;
 
   mount(document.getElementById('app'), {
     context: { theme, project: null, session: null },
@@ -263,6 +295,15 @@ const COMBOS = [
   { theme: 'light', lang: 'ru' },
   { theme: 'dark', lang: 'ru' },
 ];
+/** The daily card's carry-forward states, each in one theme/language pair. */
+const DAILY_SHOTS = [
+  { variant: 'carry', theme: 'light', lang: 'ru' },
+  { variant: 'carry', theme: 'dark', lang: 'en' },
+  { variant: 'carryMax', theme: 'light', lang: 'ru' },
+  { variant: 'over', theme: 'light', lang: 'en' },
+  { variant: 'over', theme: 'dark', lang: 'ru' },
+];
+
 /** Combos that also get a Usage-tab screenshot. */
 const USAGE_SHOTS = [
   { theme: 'light', lang: 'en' },
@@ -498,6 +539,29 @@ for (const { theme, lang } of COMBOS) {
   for (const e of errors) console.log(`      ${e}`);
   await page.close();
 }
+
+// ── the daily card's two carry-forward states ──────────────────────────
+// Just the limits row, not the whole page: these shots exist to show the
+// divided bar, and the rest of the dashboard is already covered above.
+for (const { variant, theme, lang } of DAILY_SHOTS) {
+  const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+  await page.goto(`http://127.0.0.1:${webPort}/preview.html?theme=${theme}&lang=${lang}&daily=${variant}`, { waitUntil: 'networkidle' });
+  // Every card owns a (hidden) split container; wait for one with bars in it.
+  await page.waitForSelector('.cld-limits-grid .cld-split > .cld-track');
+  await page.waitForTimeout(700); // let the bar widths finish animating
+  // Each division draws the standing allowance first, the spend over it.
+  const bars = await page.$$eval('.cld-limits-grid .cld-split:not([style*="none"]) > .cld-track', (els) =>
+    els.map((el) => `${el.children[1].style.width} of ${el.children[0].style.width}`),
+  );
+  const out = path.join(here, `preview-daily-${variant}-${theme}-${lang}.png`);
+  await page.locator('.cld-limits-grid').screenshot({ path: out });
+  console.log(`  daily/${variant} ${theme}/${lang}: [${bars.join(', ')}] -> ${out}`);
+  if (variant === 'carry' && bars.length !== 3) firstRunErrors.push(`daily=carry drew ${bars.length} divisions, expected 3`);
+  if (variant === 'carryMax' && bars.length !== 7) firstRunErrors.push(`daily=carryMax drew ${bars.length} divisions, expected 7`);
+  if (variant === 'over' && bars.length !== 2) firstRunErrors.push(`daily=over drew ${bars.length} divisions, expected 2`);
+  await page.close();
+}
+
 await browser.close();
 server.close();
 
