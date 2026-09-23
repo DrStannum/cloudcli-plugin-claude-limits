@@ -1,6 +1,6 @@
 {
   "name": "cloudcli-claude-limits",
-  "version": "2.2.2",
+  "version": "2.3.0",
   "private": true,
   "description": "CloudCLI UI plugin: a full-width Claude dashboard — plan usage limits with countdown timers, 30-day token/cost history, an active-session table with kill/resume/cleanup, and a Usage view with day/week/month/session grouping and per-project/per-model breakdowns.",
   "author": "DrStannum",
