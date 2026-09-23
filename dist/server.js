@@ -8,8 +8,10 @@
  * a claude.ai-style shape, caches it, and serves it to the frontend via RPC.
  *
  * The frontend calls:
- *   GET /limits          -> cached (<= CACHE_TTL_MS old, 1 hour) or fresh
- *   GET /limits?force=1  -> always fresh
+ *   GET /limits              -> cached (<= CACHE_TTL_MS old, 1 hour) or fresh
+ *   GET /limits?maxAge=<ms>  -> cached if younger than the poll interval (but
+ *                               never younger than MIN_LIVE_INTERVAL_MS), else fresh
+ *   GET /limits?force=1      -> always fresh
  *
  * We never rotate the refresh token (that would break Claude Code's login).
  * We just read the freshest access token Claude Code has written to disk.
@@ -60,6 +62,32 @@ const OAUTH_BETA = 'oauth-2025-04-20';
  * period to anchor it — at most one extra request a day.
  */
 const CACHE_TTL_MS = 60 * 60_000;
+
+/**
+ * The frontend's auto-refresh passes its interval as `maxAge`, so "Refresh
+ * every 5m" really means a reading at most 5 minutes old. Without it the poll
+ * only ever re-read the hour-long cache and the stamp sat at "55 min ago"
+ * until someone clicked Refresh. The floor keeps the short intervals (10s,
+ * 30s — there for the sessions table) off the rate-limited endpoint: however
+ * many tabs poll however often, the upstream sees at most one call per floor.
+ */
+const MIN_LIVE_INTERVAL_MS = 3 * 60_000;
+
+/**
+ * Timers and round-trips make a poll land a little before the reading it
+ * follows turns `maxAge` old; without slack every other poll would be served
+ * from cache and a 5-minute interval would refresh every 10.
+ */
+const MAX_AGE_SLACK_MS = 10_000;
+
+/**
+ * How old a cached reading may be for this request.
+ * @param {number|null} maxAgeMs  the caller's poll interval, if it sent one
+ */
+function cacheTtl(maxAgeMs) {
+  if (maxAgeMs == null || !Number.isFinite(maxAgeMs) || maxAgeMs <= 0) return CACHE_TTL_MS;
+  return Math.min(CACHE_TTL_MS, Math.max(maxAgeMs, MIN_LIVE_INTERVAL_MS) - MAX_AGE_SLACK_MS);
+}
 
 /**
  * The last good reading, kept on disk so it survives a backend restart. A
@@ -394,8 +422,6 @@ function saveCacheFile(out) {
   }
 }
 
-loadCacheFile();
-
 /**
  * The account's plan label, from PROFILE_ENDPOINT. Cached far longer than the
  * usage numbers and persisted alongside them: it is one short string, and
@@ -469,6 +495,13 @@ let lastFailureAt = 0;
  */
 let snapshotPeriod = null;
 
+// Only once every `let` it assigns is declared: called any earlier, the
+// `snapshotPeriod`/`profile` assignments hit the temporal dead zone, the throw
+// was swallowed by loadCacheFile's catch, and a restarted backend forgot that
+// its reading already covered the period (one needless live call) and lost
+// the cached plan label.
+loadCacheFile();
+
 /**
  * Which 24h period a reading belongs to. Periods are anchored to the weekly
  * reset, so the weekly meter carries everything needed to place one.
@@ -521,10 +554,11 @@ function staleOr(failure) {
 
 /**
  * @param {boolean} force
+ * @param {number|null} [maxAgeMs]  see cacheTtl()
  * @returns {Promise<import('../src/types').LimitsResponse>}
  */
-async function getLimits(force) {
-  const fresh = !!(cache && cache.ok && cache.data && Date.now() - cache.data.fetchedAt < CACHE_TTL_MS);
+async function getLimits(force, maxAgeMs = null) {
+  const fresh = !!(cache && cache.ok && cache.data && Date.now() - cache.data.fetchedAt < cacheTtl(maxAgeMs));
   if (!force && fresh && !needsBoundaryReading()) {
     return { ...cache, source: 'cache' };
   }
@@ -719,8 +753,9 @@ const server = http.createServer(async (req, res) => {
 
   if (req.method === 'GET' && url.pathname.replace(/\/+$/, '') === '/limits') {
     const force = url.searchParams.get('force') === '1' || url.searchParams.get('force') === 'true';
+    const maxAge = url.searchParams.has('maxAge') ? Number(url.searchParams.get('maxAge')) : null;
     try {
-      const out = await getLimits(force);
+      const out = await getLimits(force, maxAge);
       res.end(JSON.stringify(out));
     } catch (err) {
       res.writeHead(500);

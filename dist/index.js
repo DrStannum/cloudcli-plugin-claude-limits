@@ -2145,6 +2145,14 @@ export function mount(container, api) {
   }
 
   // ── loading
+  // A poll asks for a reading no older than its own interval; without that the
+  // backend answers from its hour-long cache and auto-refresh never refreshes.
+  // With auto-refresh off, the backend's own TTL applies.
+  function limitsQuery(force) {
+    if (force) return '?force=1';
+    return refreshMs > 0 ? `?maxAge=${refreshMs}` : '';
+  }
+
   async function load(force) {
     loading = true;
     render();
@@ -2155,7 +2163,7 @@ export function mount(container, api) {
       applyStaticText();
     }
     const [limitsR, historyR, sessionsR] = await Promise.all([
-      api.rpc('GET', `limits${force ? '?force=1' : ''}`).catch((e) => ({ ok: false, error: errMsg(e) })),
+      api.rpc('GET', `limits${limitsQuery(force)}`).catch((e) => ({ ok: false, error: errMsg(e) })),
       api.rpc('GET', 'history?days=30').catch((e) => ({ error: errMsg(e) })),
       api.rpc('GET', 'sessions').catch((e) => ({ ok: false, error: errMsg(e) })),
     ]);

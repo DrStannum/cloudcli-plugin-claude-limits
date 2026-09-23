@@ -310,6 +310,87 @@ ok(fs.existsSync(cacheFile), 'backend persisted its last reading');
   restarted.kill();
 }
 
+// ── /limits?maxAge: auto-refresh gets readings as old as its interval ──
+// The poll used to hit the hour-long cache, so "Refresh every 5m" showed
+// "updated 55 min ago" until the Refresh button was clicked. A reading 10
+// minutes old must go live for a 5-minute poll, stay cached for a caller that
+// sends no interval, and a 10-second poll is held to the 3-minute floor.
+{
+  const agedCache = path.join(os.tmpdir(), `cl-smoke-aged-cache-${process.pid}.json`);
+  const saved = JSON.parse(fs.readFileSync(cacheFile, 'utf8'));
+  // Age the whole reading, resets included: the fixture's 24h period opened
+  // about a minute before it was taken, and moving only `fetchedAt` back would
+  // land it in the previous period and trip needsBoundaryReading() instead.
+  const ageBy = (ms) => {
+    saved.data.fetchedAt -= ms;
+    for (const w of saved.data.weekly) if (w.resetsAtMs != null) w.resetsAtMs -= ms;
+  };
+  ageBy(Date.now() - saved.data.fetchedAt + 10 * 60_000);
+  fs.writeFileSync(agedCache, JSON.stringify(saved));
+  const aged = spawn('node', [path.join(PLUGIN, 'dist/server.js')], {
+    env: {
+      PATH: process.env.PATH, HOME: tmpHome, NODE_ENV: 'production',
+      PLUGIN_NAME: 'cloudcli-claude-limits',
+      CLAUDE_LIMITS_CREDS: tmp,
+      CLAUDE_LIMITS_ENDPOINT: `http://127.0.0.1:${upPort}/usage`,
+      CLAUDE_LIMITS_PROFILE_ENDPOINT: `http://127.0.0.1:${upPort}/profile`,
+      CLAUDE_LIMITS_HISTORY: histFile,
+      CLAUDE_LIMITS_USAGE_LOG: noLegacy,
+      CLAUDE_LIMITS_CACHE: agedCache,
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  const agedPort = await new Promise((resolve, reject) => {
+    let buf = '';
+    const timer = setTimeout(() => reject(new Error('aged-cache backend: no ready signal')), 5000);
+    aged.stdout.on('data', (d) => {
+      buf += d;
+      const line = buf.split('\n').find((l) => l.includes('"ready"'));
+      if (line) { clearTimeout(timer); resolve(JSON.parse(line).port); }
+    });
+  });
+  const base = `http://127.0.0.1:${agedPort}/limits`;
+  const noInterval = await (await fetch(base)).json();
+  ok(noInterval.source === 'cache', `no maxAge: a 10-min-old reading is within the hour, got ${noInterval.source}`);
+  const tenSec = await (await fetch(`${base}?maxAge=10000`)).json();
+  ok(tenSec.source === 'live', `maxAge=10s: a 10-min-old reading is past the 3-min floor, got ${tenSec.source}`);
+  const tenSecAgain = await (await fetch(`${base}?maxAge=10000`)).json();
+  ok(tenSecAgain.source === 'cache', `maxAge=10s right after a live read: the floor keeps it cached, got ${tenSecAgain.source}`);
+  aged.kill();
+
+  fs.writeFileSync(agedCache, JSON.stringify(saved));
+  const aged5 = spawn('node', [path.join(PLUGIN, 'dist/server.js')], {
+    env: {
+      PATH: process.env.PATH, HOME: tmpHome, NODE_ENV: 'production',
+      PLUGIN_NAME: 'cloudcli-claude-limits',
+      CLAUDE_LIMITS_CREDS: tmp,
+      CLAUDE_LIMITS_ENDPOINT: `http://127.0.0.1:${upPort}/usage`,
+      CLAUDE_LIMITS_PROFILE_ENDPOINT: `http://127.0.0.1:${upPort}/profile`,
+      CLAUDE_LIMITS_HISTORY: histFile,
+      CLAUDE_LIMITS_USAGE_LOG: noLegacy,
+      CLAUDE_LIMITS_CACHE: agedCache,
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  const aged5Port = await new Promise((resolve, reject) => {
+    let buf = '';
+    const timer = setTimeout(() => reject(new Error('aged-cache backend: no ready signal')), 5000);
+    aged5.stdout.on('data', (d) => {
+      buf += d;
+      const line = buf.split('\n').find((l) => l.includes('"ready"'));
+      if (line) { clearTimeout(timer); resolve(JSON.parse(line).port); }
+    });
+  });
+  const base5 = `http://127.0.0.1:${aged5Port}/limits`;
+  const quarterHour = await (await fetch(`${base5}?maxAge=900000`)).json();
+  ok(quarterHour.source === 'cache', `maxAge=15m: a 10-min-old reading is still good, got ${quarterHour.source}`);
+  const fiveMin = await (await fetch(`${base5}?maxAge=300000`)).json();
+  ok(fiveMin.source === 'live', `maxAge=5m: a 10-min-old reading goes live, got ${fiveMin.source}`);
+  ok(fiveMin.data?.fetchedAt > Date.now() - 60_000, 'the live reading carries a fresh timestamp');
+  aged5.kill();
+  fs.rmSync(agedCache, { force: true });
+}
+
 // ── /limits via the structured `raw.limits[]` shape ─────────────────────
 // Anthropic's live response (confirmed 2026-08-19) carries a self-describing
 // `limits[]` array alongside the legacy flat keys; its `weekly_scoped` entry

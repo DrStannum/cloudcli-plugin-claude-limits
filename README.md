@@ -92,8 +92,10 @@ like a narrow sidebar panel.
 **Refresh every** (top-right) sets the data-poll interval — 10s / 30s / 1m /
 3m / 5m / Off, defaulting to **3m**, persisted in `localStorage` under
 `cloudcli-claude-limits:refreshMs` (same key the pre-2.0 tab used). The
-countdown timers tick on their own 1-second timer and don't trigger a
-re-fetch.
+limits reading is never older than the interval, with a 3-minute floor: the
+shorter settings refresh the sessions table that often, but the rate-limited
+usage endpoint is asked at most once every 3 minutes. The countdown timers
+tick on their own 1-second timer and don't trigger a re-fetch.
 
 ## How it works
 
@@ -162,6 +164,10 @@ exception keeps the daily meter honest: today's budget is measured against
 the weekly % at the start of the current 24h period, and that reading only
 happens on a live fetch, so a call is let through whenever a new period has
 opened since the last one — at most one extra request a day.
+The auto-refresh poll sends its interval as `GET /limits?maxAge=<ms>`, which
+narrows that hour to the interval (never below 3 minutes, `MIN_LIVE_INTERVAL_MS`)
+— without it the poll only re-read the cache and "Refresh every 5m" sat at
+"updated 55 min ago". With auto-refresh Off the hour applies.
 The Refresh button sends `GET /limits?force=1`, which skips the cache; the
 header stamp shows the data's real age, plus a quiet `Cached at 13:59` when
 the answer came from there (its tooltip names the upstream error, if any).
