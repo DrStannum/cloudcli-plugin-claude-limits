@@ -943,20 +943,18 @@ export function mount(container, api) {
   const cacheStamp = h('span', 'cld-stamp cld-stamp-cache', '');
   const staleBadge = h('span', 'cld-stale', '');
   staleBadge.style.display = 'none';
-  const intervalLabel = h('label');
-  Object.assign(intervalLabel.style, { display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.78rem', color: 'var(--muted)' });
-  const intervalSpan = h('span');
+  // No visible caption: next to the Refresh button a list of intervals speaks
+  // for itself. The wording lives on as the tooltip and accessible name.
   const rateSel = /** @type {HTMLSelectElement} */ (h('select', 'cld-sel'));
   for (const ms of REFRESH_OPTIONS) {
     const opt = /** @type {HTMLOptionElement} */ (h('option'));
     opt.value = String(ms);
     rateSel.append(opt);
   }
-  intervalLabel.append(intervalSpan, rateSel);
   const refreshBtn = h('button', 'cld-btn cld-icon-btn');
   refreshBtn.innerHTML =
     '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 4v5h-5"/></svg>';
-  right.append(stamp, cacheStamp, staleBadge, intervalLabel, refreshBtn);
+  right.append(stamp, cacheStamp, staleBadge, rateSel, refreshBtn);
   const tabs = h('div', 'cld-tabs');
   const tabDashBtn = h('button', 'cld-tab');
   const tabUsageBtn = h('button', 'cld-tab');
@@ -1701,7 +1699,8 @@ export function mount(container, api) {
 
   function applyStaticText() {
     titleText.textContent = t.title;
-    intervalSpan.textContent = t.interval;
+    rateSel.title = t.interval;
+    rateSel.setAttribute('aria-label', t.interval);
     Array.from(rateSel.options).forEach((opt, i) => {
       opt.textContent = t.intervalOption(REFRESH_OPTIONS[i]);
     });
@@ -1792,7 +1791,46 @@ export function mount(container, api) {
       }
       c.title.textContent = entry.label;
       const m = entry.meterObj;
-      const pctVal = m.usedPct == null ? null : Math.max(0, Math.min(100, m.usedPct));
+
+      // The daily budget is a day's share (1/7 of the week) plus whatever the
+      // earlier days left unspent, and carry-forward works both ways: past
+      // that budget the spend comes out of tomorrow's share. Either way the
+      // card stops being about a single period, so the bar splits into one
+      // division per period involved — oldest first, so it still fills left to
+      // right: the days carried in, then today's own share, then tomorrow's.
+      const BASE = 100 / 7;
+      const daily = m.kind === 'daily' && m.todayBudget != null && m.todayUsed != null;
+      // Allowance carried in from days that weren't spent out, as whole days
+      // rounded up: a day left 30% unspent is still a day that went unspent,
+      // so it gets its own division — just a partly filled one.
+      const carry = daily ? m.todayBudget - BASE : 0;
+      const carryAll = carry > 0.5 ? Math.ceil(carry / BASE - 0.01) : 0;
+      // Spend is charged to the oldest allowance first, so today's own share
+      // stays untouched for as long as a carried day is still standing. A
+      // carried day spent out is history: it drops off the bar, and out of the
+      // budget the card measures, rather than sitting there as a full red
+      // division next to today's.
+      /** @type {{cap:number, spent:number}[]} */
+      const carried = [];
+      let rest = daily ? m.todayUsed : 0;
+      let dropped = 0;
+      for (let i = 0; i < carryAll; i++) {
+        // Whole days first; the leftover fraction is the division next to
+        // today, the last of the reserve to go.
+        const cap = Math.min(BASE, carry - i * BASE);
+        const spent = Math.min(rest, cap);
+        rest -= spent;
+        if (cap - spent < 0.005) dropped += cap;
+        else carried.push({ cap, spent });
+      }
+      const carryDays = carried.length;
+      const carryLeft = carried.reduce((a, d) => a + d.cap - d.spent, 0);
+      const shownUsedPct = !daily || dropped === 0
+        ? m.usedPct
+        : m.todayBudget - dropped > 0
+          ? ((m.todayUsed - dropped) * 100) / (m.todayBudget - dropped)
+          : 100;
+      const pctVal = shownUsedPct == null ? null : Math.max(0, Math.min(100, shownUsedPct));
       c.countdownSub.textContent = t.remaining(pctVal == null ? null : Math.round(100 - pctVal));
       const sev = severity(pctVal, T_LIMIT);
       c.meter.set(pctVal, sev.color);
@@ -1807,22 +1845,9 @@ export function mount(container, api) {
       c.footRight.className = sev.level === 'crit' ? 'cld-crit' : sev.level === 'warn' ? 'cld-warn' : '';
       c.countdown.textContent = fmtCountdown(m.resetsAtMs != null ? m.resetsAtMs - Date.now() : null);
 
-      // The daily budget is a day's share (1/7 of the week) plus whatever the
-      // earlier days left unspent, and carry-forward works both ways: past
-      // that budget the spend comes out of tomorrow's share. Either way the
-      // card stops being about a single period, so the bar splits into one
-      // division per period involved — oldest first, so it still fills left to
-      // right: the days carried in, then today's own share, then tomorrow's.
-      const BASE = 100 / 7;
-      const daily = m.kind === 'daily' && m.todayBudget != null && m.todayUsed != null;
       // No tomorrow on the cycle's last day — its ceiling is already 100% and
       // the weekly reset follows.
       const over = daily && m.deltaPct > 0.005 && m.ceilingPct < 99.5 ? m.deltaPct : 0;
-      // Allowance carried in from days that weren't spent out, as whole days
-      // rounded up: a day left 30% unspent is still a day that went unspent,
-      // so it gets its own division — just a partly filled one.
-      const carry = daily ? m.todayBudget - BASE : 0;
-      const carryDays = carry > 0.5 ? Math.ceil(carry / BASE - 0.01) : 0;
       const split = over > 0 || carryDays > 0;
       c.meter.track.style.display = split ? 'none' : '';
       c.split.style.display = split ? '' : 'none';
@@ -1832,16 +1857,8 @@ export function mount(container, api) {
         const segs = [];
         /** @type {{span:number, dot:string, lead:string, leadTip:string, trail:string, trailTip:string}[]} */
         const legendSpec = [];
-        // Spend is charged to the oldest allowance first, so today's own share
-        // stays untouched for as long as a carried day is still standing.
-        let rest = m.todayUsed;
         if (carryDays) {
-          for (let i = 0; i < carryDays; i++) {
-            // Whole days first; the leftover fraction is the division next to
-            // today, the last of the reserve to go.
-            const cap = Math.min(BASE, carry - i * BASE);
-            const spent = Math.min(rest, cap);
-            rest -= spent;
+          for (const { cap, spent } of carried) {
             segs.push({
               avail: (cap * 100) / BASE,
               availColor: 'var(--ok)',
@@ -1853,13 +1870,14 @@ export function mount(container, api) {
           legendSpec.push({
             span: carryDays, dot: 'var(--ok)',
             lead: t.carryDays(carryDays), leadTip: t.hintCarry(carryDays),
-            trail: `+${Math.round(Math.max(0, carry - Math.min(m.todayUsed, carry)))}%`,
+            trail: `+${Math.round(carryLeft)}%`,
             trailTip: t.hintCarryLeft,
           });
         }
         // With days carried in, today's division is its own 1/7 share; without
-        // them it is the whole budget (which the earlier days may have shrunk).
-        const own = carryDays ? BASE : m.todayBudget;
+        // them it is the whole budget less any carried day already spent out
+        // (a budget the earlier days may also have shrunk below 1/7).
+        const own = carryDays ? BASE : m.todayBudget - dropped;
         const ownPct = own > 0 ? Math.min(100, (Math.max(0, rest) * 100) / own) : 100;
         const ownShown = Math.round(ownPct);
         segs.push({

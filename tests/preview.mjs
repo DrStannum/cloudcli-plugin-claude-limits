@@ -172,6 +172,20 @@ const dailyVariants = {
     ...limits.data.daily, usedPct: 0.6, valueText: '0% \u2192 100%',
     todayUsed: 0.6, todayBudget: 100, deltaPct: -99.4, dayStartPct: 0, ceilingPct: 100,
   },
+  // Day 5 (ceiling 5/7 = 71%), the reading that prompted dropping spent-out
+  // days: 12.2% carried in from yesterday, 24% spent today. The carried day is
+  // gone and 83% of today's own share with it, so the card is back to one
+  // plain bar at 83% — not a full red division beside today's.
+  carrySpent: {
+    ...limits.data.daily, usedPct: 90.83, valueText: '44% \u2192 71%',
+    todayUsed: 24.04, todayBudget: 26.47, deltaPct: -2.43, dayStartPct: 44.96, ceilingPct: 71.43,
+  },
+  // The `carry` reading 14.3% later: the older of the two carried days is
+  // spent out and drops off, the 60% one is two-thirds gone.
+  carryPartSpent: {
+    ...limits.data.daily, usedPct: 53.85, valueText: '20% \u2192 57%',
+    todayUsed: 20, todayBudget: 37.14, deltaPct: -17.14, dayStartPct: 20, ceilingPct: 57.14,
+  },
   // Day 5 (ceiling 5/7 = 71%) after a heavy start: today's budget is 10.4% and
   // 15% is already gone, a third of tomorrow's share borrowed in advance.
   over: {
@@ -300,6 +314,8 @@ const DAILY_SHOTS = [
   { variant: 'carry', theme: 'light', lang: 'ru' },
   { variant: 'carry', theme: 'dark', lang: 'en' },
   { variant: 'carryMax', theme: 'light', lang: 'ru' },
+  { variant: 'carrySpent', theme: 'light', lang: 'ru' },
+  { variant: 'carryPartSpent', theme: 'dark', lang: 'ru' },
   { variant: 'over', theme: 'light', lang: 'en' },
   { variant: 'over', theme: 'dark', lang: 'ru' },
 ];
@@ -546,8 +562,11 @@ for (const { theme, lang } of COMBOS) {
 for (const { variant, theme, lang } of DAILY_SHOTS) {
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
   await page.goto(`http://127.0.0.1:${webPort}/preview.html?theme=${theme}&lang=${lang}&daily=${variant}`, { waitUntil: 'networkidle' });
-  // Every card owns a (hidden) split container; wait for one with bars in it.
-  await page.waitForSelector('.cld-limits-grid .cld-split > .cld-track');
+  // Every card owns a (hidden) split container; wait for one with bars in it
+  // (none at all once every carried day is spent out: then the plain bar).
+  await page.waitForSelector(
+    variant === 'carrySpent' ? '.cld-limits-grid .cld-countdown-sub' : '.cld-limits-grid .cld-split > .cld-track',
+  );
   await page.waitForTimeout(700); // let the bar widths finish animating
   // Each division draws the standing allowance first, the spend over it.
   const bars = await page.$$eval('.cld-limits-grid .cld-split:not([style*="none"]) > .cld-track', (els) =>
@@ -559,6 +578,13 @@ for (const { variant, theme, lang } of DAILY_SHOTS) {
   if (variant === 'carry' && bars.length !== 3) firstRunErrors.push(`daily=carry drew ${bars.length} divisions, expected 3`);
   if (variant === 'carryMax' && bars.length !== 7) firstRunErrors.push(`daily=carryMax drew ${bars.length} divisions, expected 7`);
   if (variant === 'over' && bars.length !== 2) firstRunErrors.push(`daily=over drew ${bars.length} divisions, expected 2`);
+  if (variant === 'carryPartSpent' && bars.length !== 2) firstRunErrors.push(`daily=carryPartSpent drew ${bars.length} divisions, expected 2 (spent-out day dropped)`);
+  if (variant === 'carrySpent') {
+    // Session, today's budget, weekly — in that order.
+    const sub = await page.$$eval('.cld-limits-grid .cld-countdown-sub', (els) => els.map((e) => e.textContent));
+    if (bars.length !== 0) firstRunErrors.push(`daily=carrySpent drew ${bars.length} divisions, expected the plain bar`);
+    if (!/17%/.test(sub[1] || '')) firstRunErrors.push(`daily=carrySpent: today's own share should read 17% left, got "${sub[1]}"`);
+  }
   await page.close();
 }
 

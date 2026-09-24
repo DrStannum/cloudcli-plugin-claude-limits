@@ -89,8 +89,8 @@ Both light/dark theme (follows the host panel) and English/Russian
 event) are supported. The container is intentionally full-width, not capped
 like a narrow sidebar panel.
 
-**Refresh every** (top-right) sets the data-poll interval — 10s / 30s / 1m /
-3m / 5m / Off, defaulting to **3m**, persisted in `localStorage` under
+The interval dropdown (top-right, next to Refresh; tooltip *Refresh every*)
+sets the data-poll interval — 10s / 30s / 1m / 3m / 5m / Off, defaulting to **3m**, persisted in `localStorage` under
 `cloudcli-claude-limits:refreshMs` (same key the pre-2.0 tab used). The
 limits reading is never older than the interval, with a 3-minute floor: the
 shorter settings refresh the sessions table that often, but the rate-limited
@@ -150,7 +150,9 @@ covers, each with an instant-hover tooltip:
   left 60% unspent is still an unspent day, so it gets its own division,
   green over 60% of its width). The legend reads e.g. `+2d` · `+17%` ·
   `0%`: two days carried in, 17 weekly points of them still standing, and
-  today's own share untouched.
+  today's own share untouched. A carried day spent out drops off the row and
+  out of the budget the card measures (its `remaining` included) — once the
+  last one goes, the card is back to a plain bar over today's own share.
 * **Tomorrow borrowed against.** Past the whole budget the overrun comes out
   of tomorrow's share, which joins the row as a last division showing how
   much of it is already gone, and the caption band gains the next period's
